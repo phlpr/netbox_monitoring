@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netbox-monitoring"
+description = "Backend-independent monitoring profiles, checks, and asset overrides for NetBox"
+dynamic = ["version"]
+requires-python = ">=3.12"
+readme = "README.md"
+authors = [{name = "Philipp Prohaszka"}]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["netbox", "plugin", "monitoring", "nagios", "op5"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Django",
+    "Intended Audience :: System Administrators",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Monitoring",
+]
+
+[project.urls]
+Repository = "https://github.com/phlpr/netbox_monitoring"
+Issues = "https://github.com/phlpr/netbox_monitoring/issues"
+
+[tool.setuptools.dynamic]
+version = {attr = "netbox_monitoring.version.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["netbox_monitoring*"]
+
+[tool.setuptools.package-data]
+netbox_monitoring = ["templates/netbox_monitoring/*.html", "static/netbox_monitoring/*.js", "static/netbox_monitoring/*.css"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
