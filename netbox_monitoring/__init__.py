@@ -12,6 +12,14 @@ class MonitoringConfig(PluginConfig):
     base_url = "monitoring"
     min_version = "4.6.10"
     default_settings = {"monitoring_admin_group": "Monitoring Administrators"}
+    middleware = ["netbox_monitoring.monitoring_permissions.MonitoringRequestMiddleware"]
+
+    def ready(self):
+        super().ready()
+        from . import monitoring_signals  # noqa: F401 -- register lifecycle validation
+        from .monitoring_views import register_monitoring_tabs
+
+        register_monitoring_tabs()
 
 
 config = MonitoringConfig

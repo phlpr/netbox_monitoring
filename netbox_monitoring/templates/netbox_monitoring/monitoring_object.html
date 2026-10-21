@@ -1,0 +1,34 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load render_table from django_tables2 %}
+{% block content %}
+<div class="row mb-3">
+  <div class="col-md-8">
+    <div class="card">
+      <h5 class="card-header">{{ object|meta:"verbose_name" }}</h5>
+      <table class="table table-hover attr-table">
+        {% for label, value in detail_rows %}
+        <tr><th scope="row">{{ label }}</th><td>
+          {% if label == 'Enabled' or label == 'Selectable' %}
+            {% if value %}Yes{% else %}No{% endif %}
+          {% elif value.get_absolute_url %}{{ value|linkify }}
+          {% elif label == 'Parameters' %}<pre class="mb-0">{{ value }}</pre>
+          {% else %}{{ value|default_if_none:"—" }}{% endif %}
+        </td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+  <div class="col-md-4">
+    {% include 'inc/panels/custom_fields.html' %}
+    {% include 'inc/panels/tags.html' %}
+    {% include 'inc/panels/comments.html' %}
+  </div>
+</div>
+{% if checks_table %}
+<div class="card mb-3"><h5 class="card-header">Profile checks</h5>{% render_table checks_table %}</div>
+<div class="card mb-3"><h5 class="card-header">Assigned assets visible to you ({{ assigned_assets|length }})</h5>
+<ul class="list-group list-group-flush">{% for asset in assigned_assets %}<li class="list-group-item">{{ asset|linkify }}</li>
+{% empty %}<li class="list-group-item text-muted">No visible assignments.</li>{% endfor %}</ul></div>
+{% endif %}
+{% endblock %}

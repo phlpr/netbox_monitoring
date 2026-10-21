@@ -20,6 +20,9 @@ classifiers = [
     "Topic :: System :: Monitoring",
 ]
 
+[project.optional-dependencies]
+dev = ["build", "ruff"]
+
 [project.urls]
 Repository = "https://github.com/phlpr/netbox_monitoring"
 Issues = "https://github.com/phlpr/netbox_monitoring/issues"
@@ -31,8 +34,14 @@ version = {attr = "netbox_monitoring.version.__version__"}
 include = ["netbox_monitoring*"]
 
 [tool.setuptools.package-data]
-netbox_monitoring = ["templates/netbox_monitoring/*.html", "static/netbox_monitoring/*.js", "static/netbox_monitoring/*.css"]
+netbox_monitoring = ["templates/netbox_monitoring/*.html", "static/netbox_monitoring/js/*.js"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/configuration.py" = ["F403", "F405"]
