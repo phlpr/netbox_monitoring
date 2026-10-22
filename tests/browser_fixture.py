@@ -10,7 +10,9 @@ from uuid import uuid4
 from dcim.models import Site
 from django.conf import settings
 from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY, get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
+from ipam.models import IPAddress
 from virtualization.models import VirtualMachine
 
 from netbox_monitoring.models import MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
@@ -30,6 +32,9 @@ def prepare():
     user = get_user_model().objects.create_superuser(username=f"monitoring-browser-{marker}")
     site = Site.objects.create(name=f"Monitoring browser {marker}", slug=f"monitoring-browser-{marker}")
     profile = MonitoringProfile.objects.create(name=f"Monitoring browser {marker}")
+    profile.object_types.add(ContentType.objects.get_for_model(Site))
+    site.custom_field_data[PROFILE_FIELD] = profile.pk
+    site.save()
     vm = VirtualMachine.objects.create(
         name=f"monitoring-browser-{marker}", site=site, custom_field_data={PROFILE_FIELD: profile.pk}
     )
@@ -47,6 +52,8 @@ def prepare():
         "user_id": user.pk,
         "username": user.username,
         "site_id": site.pk,
+        "site_object_type_id": ContentType.objects.get_for_model(Site).pk,
+        "ipaddress_object_type_id": ContentType.objects.get_for_model(IPAddress).pk,
         "profile_id": profile.pk,
         "vm_id": vm.pk,
         "disk_key_id": disk.pk,
@@ -73,10 +80,10 @@ def cleanup():
     assert data["username"].startswith("monitoring-browser-")
     import_module(settings.SESSION_ENGINE).SessionStore(session_key=data["cookie"]["value"]).delete()
     VirtualMachine.objects.get(pk=data["vm_id"], name=data["username"]).delete()
+    Site.objects.get(pk=data["site_id"]).delete()
     MonitoringCheckRule.objects.get(pk=data["rule_id"]).delete()
     MonitoringProfile.objects.get(pk=data["profile_id"]).delete()
     MonitoringCheckKey.objects.filter(pk__in=[data["disk_key_id"], data["cpu_key_id"]]).delete()
-    Site.objects.get(pk=data["site_id"]).delete()
     get_user_model().objects.get(pk=data["user_id"], username=data["username"]).delete()
     path.unlink()
     print("Disposable browser account, session, and monitoring fixtures removed.")

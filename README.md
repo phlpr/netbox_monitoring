@@ -1,7 +1,7 @@
 # NetBox Monitoring
 
 Manage desired monitoring configuration in NetBox using reusable profiles, typed
-checks, and justified exceptions for individual devices and virtual machines.
+checks, and justified exceptions for individual NetBox objects.
 
 This standalone plugin extracts the monitoring functionality from
 `netbox_aesai` (`0.7.0.dev2`). It retains its check semantics, central maintenance permissions, and native NetBox
@@ -10,7 +10,7 @@ dependency on AESAI, Nagios, or op5.
 
 ## Status and compatibility
 
-Initial development version: **0.1.0.dev2**. Minimum NetBox version: **4.6.10**.
+Initial development version: **0.1.0.dev3**. Minimum NetBox version: **4.6.10**.
 Python **3.12 or later** is required. Integration tests pass on NetBox **4.6.10** and **4.7.0** with PostgreSQL and Redis.
 Browser flows are verified on 4.7.0. Other versions have not yet been verified.
 
@@ -21,7 +21,7 @@ are outside this initial implementation.
 ## Features
 
 - One optional monitoring profile per asset, selected through a native Object
-  custom field when creating or editing a Device or Virtual Machine.
+  custom field when creating or editing a supported NetBox object.
 - Profiles restricted by native Object type(s) and optional platform. Retired profiles can
   remain effective for existing assignments while being hidden from new choices.
 - A globally unique check key catalog with descriptions and a single check type
@@ -33,7 +33,7 @@ are outside this initial implementation.
 - A deterministic resolver with provenance and a configuration hash. It rejects
   exports when the caller cannot read every relevant rule or active exception.
 - UI lists, detail pages, editing, change previews, bulk editing/deletion, imports,
-  global search, and Monitoring tabs on Devices and Virtual Machines with an
+  global search, and Monitoring tabs on supported objects with an
   authorized Add asset Exception button prefilled for the current asset/profile.
 - Native tags, comments, custom fields, journals, and changelog integration.
 - REST CRUD, profile impact reporting, monitored-asset discovery, and per-asset
@@ -77,7 +77,7 @@ cd /opt/netbox/netbox
 /opt/netbox/venv/bin/python manage.py collectstatic --no-input
 ```
 
-Preview the native profile selector, then create it explicitly:
+Preview the native profile selector, then create or extend it explicitly:
 
 ```bash
 /opt/netbox/venv/bin/python manage.py setup_monitoring_fields
@@ -88,11 +88,14 @@ Restart your NetBox application and workers using your normal service procedure.
 The plugin UI is under `/plugins/monitoring/`.
 
 The setup command creates `monitoring_profile` as a single Object field pointing
-to `netbox_monitoring.monitoringprofile`, available on `dcim.device` and
-`virtualization.virtualmachine`. It has no default and assigns no profiles to
+to `netbox_monitoring.monitoringprofile`, available on all public, installed
+NetBox and plugin object types supporting custom fields. The plugin's own monitoring
+configuration models are excluded to avoid recursive monitoring. It has no default and assigns no profiles to
 existing assets. Only profiles with status `active` appear in the selector. Profiles with status
 `disabled` remain effective for existing assignments. Compatible
-existing fields are left unchanged; incompatible fields cause an error.
+existing fields are extended to additional supported object types with `--apply`;
+existing profile scopes and asset assignments remain unchanged. Incompatible fields cause an error.
+Rerun this command after installing another plugin to enable its supported object types.
 
 ## Permissions
 
@@ -120,7 +123,10 @@ setup command creates neither automatically.
 Profile status uses the native NetBox choice format with `active` (green) and
 `disabled` (gray). It can be configured through
 `FIELD_CHOICES["netbox_monitoring.MonitoringProfile.status"]`. Object type selection
-uses the native multi-select, currently supporting Devices and Virtual Machines.
+uses the native multi-select for all supported object types, including Devices,
+Virtual Machines, Sites, Racks, Interfaces, and IP Addresses. New profiles initially
+select Devices and Virtual Machines; choose the types appropriate to the profile.
+The optional platform filter applies only to objects with a platform field.
 Existing `selectable` and `asset_type` values are migrated automatically without
 changing asset assignments. Ownership is rendered in the native Ownership section.
 
@@ -201,11 +207,12 @@ All endpoints require authentication and use normal NetBox API tokens:
 /api/plugins/monitoring/monitoring-check-rules/
 /api/plugins/monitoring/monitoring-asset-overrides/
 /api/plugins/monitoring/assets/
-/api/plugins/monitoring/assets/dcim.device/<id>/config/
-/api/plugins/monitoring/assets/virtualization.virtualmachine/<id>/config/
-/api/plugins/monitoring/monitoring-effective/dcim.device/<id>/
-/api/plugins/monitoring/monitoring-effective/virtualization.virtualmachine/<id>/
+/api/plugins/monitoring/assets/<app_label.model>/<id>/config/
+/api/plugins/monitoring/monitoring-effective/<app_label.model>/<id>/
 ```
+
+For example, use `dcim.device`, `virtualization.virtualmachine`, `dcim.site`,
+or `ipam.ipaddress` as the object type.
 
 `GET /api/plugins/monitoring/assets/` discovers configured assets visible to the
 caller, with a `config_url` for each asset and limit/offset pagination. An
@@ -289,7 +296,9 @@ settings from NetBox's `configuration_testing.py` are used.
 
 Tests cover check semantics, inheritance and expiry, hashes, lifecycle protection,
 permission combinations, native forms and serializers, event data, REST CRUD,
-selector setup, imports, previews, changelog, and Device/VM tabs. Templates,
+selector setup and expansion, imports, previews, changelog, and monitoring tabs.
+Sites and IP addresses additionally cover generic assignments, scope protection,
+exceptions, config exports, discovery, and native object permissions. Templates,
 migrations, management commands, and form JavaScript are included in the wheel.
 
 `tests/browser/monitoring.cjs` also checks the native profile form, key-driven

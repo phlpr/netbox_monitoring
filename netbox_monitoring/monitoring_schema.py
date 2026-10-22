@@ -7,7 +7,7 @@ from ipaddress import ip_address
 
 from django.core.exceptions import ValidationError
 
-ASSET_MODELS = ("dcim.device", "virtualization.virtualmachine")
+DEFAULT_ASSET_MODELS = ("dcim.device", "virtualization.virtualmachine")
 PROFILE_FIELD = "monitoring_profile"
 CHECK_TYPES = (
     ("disk", "Disk space"),

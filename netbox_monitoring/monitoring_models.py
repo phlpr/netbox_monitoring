@@ -10,12 +10,16 @@ from django.utils import timezone
 from netbox.models import PrimaryModel
 from utilities.querysets import RestrictedQuerySet
 
+from .assets import asset_models, is_asset_model
 from .choices import MonitoringProfileStatusChoices
-from .monitoring_schema import ASSET_MODELS, CHECK_TYPES, OPERATIONS, PROFILE_FIELD, changed_parameters, validate_check
-
-
-def asset_models():
-    return [apps.get_model(label) for label in ASSET_MODELS]
+from .monitoring_schema import (
+    CHECK_TYPES,
+    DEFAULT_ASSET_MODELS,
+    OPERATIONS,
+    PROFILE_FIELD,
+    changed_parameters,
+    validate_check,
+)
 
 
 def assigned_assets(profile, user=None):
@@ -107,19 +111,19 @@ class MonitoringProfile(MonitoringModel):
             return list(self.object_types.all())
         from django.contrib.contenttypes.models import ContentType
 
-        return [ContentType.objects.get_for_model(model) for model in asset_models()]
+        return [ContentType.objects.get_for_model(apps.get_model(label)) for label in DEFAULT_ASSET_MODELS]
 
     def accepts(self, asset):
         return (
-            asset._meta.label_lower in ASSET_MODELS
+            is_asset_model(type(asset))
             and any(f"{ct.app_label}.{ct.model}" == asset._meta.label_lower for ct in self.selected_object_types())
-            and (self.platform_id is None or self.platform_id == asset.platform_id)
+            and (self.platform_id is None or not hasattr(asset, "platform_id") or self.platform_id == asset.platform_id)
         )
 
     def clean(self):
         super().clean()
         types = self.selected_object_types()
-        if not types or any(f"{ct.app_label}.{ct.model}" not in ASSET_MODELS for ct in types):
+        if not types or any(not is_asset_model(ct.model_class()) for ct in types):
             raise ValidationError({"object_types": "Select at least one supported asset object type."})
         if self.pk:
             if any(not self.accepts(asset) for asset in assigned_assets(self)):
@@ -287,9 +291,8 @@ class MonitoringAssetOverride(MonitoringModel):
         super().clean()
         if not self.assigned_object_type_id or not self.profile_id:
             return
-        label = f"{self.assigned_object_type.app_label}.{self.assigned_object_type.model}"
-        if label not in ASSET_MODELS:
-            raise ValidationError({"assigned_object_type": "Only Devices and Virtual Machines are supported."})
+        if not is_asset_model(self.assigned_object_type.model_class()):
+            raise ValidationError({"assigned_object_type": "Select a public object type supporting custom fields."})
         asset = self.assigned_object
         if asset is None:
             raise ValidationError({"assigned_object_id": "The target asset does not exist."})

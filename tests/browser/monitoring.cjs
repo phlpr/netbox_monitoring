@@ -31,6 +31,10 @@ const { chromium } = require('playwright');
     await go('/plugins/monitoring/monitoring-profiles/add/');
     assert.equal(await page.locator('[name="status"]').inputValue(), 'active');
     assert.equal(await page.locator('[name="object_types"]').count(), 1);
+    const objectTypeIds = await page.locator('[name="object_types"] option').evaluateAll(
+      options => options.map(option => Number(option.value)));
+    assert.ok(objectTypeIds.includes(fixture.site_object_type_id));
+    assert.ok(objectTypeIds.includes(fixture.ipaddress_object_type_id));
     assert.equal(await page.getByRole('heading', { name: 'Ownership', exact: true }).count(), 1);
     const order = await page.locator('select[name="owner_group"], select[name="owner"]').evaluateAll(
       fields => fields.map(field => field.name));
@@ -58,6 +62,10 @@ const { chromium } = require('playwright');
     assert.equal(await page.locator('[name="warning"]').inputValue(), '80');
     assert.equal(await page.locator('[name="critical"]').inputValue(), '90');
     assert.equal(await page.locator('[name="key"]').isEnabled(), false);
+    await go(`/dcim/sites/${fixture.site_id}/monitoring/`);
+    await page.getByRole('link', { name: 'Add asset Exception', exact: true }).click();
+    assert.equal(await page.locator('[name="assigned_object_id"]').inputValue(), String(fixture.site_id));
+    assert.equal(await page.locator('[name="assigned_object_type"]').inputValue(), String(fixture.site_object_type_id));
     assert.deepEqual(errors, []);
     console.log('Browser checks passed: profile status/object types/ownership, key-driven parameter fields, asset exception prefill and inherited rule defaults.');
   } finally {

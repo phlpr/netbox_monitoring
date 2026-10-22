@@ -1,4 +1,4 @@
-"""Validate profile selections on all Device/VM form, API and import writes."""
+"""Validate profile selections on all supported object form, API and import writes."""
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -10,14 +10,15 @@ from django.dispatch import receiver
 from django.utils import timezone
 from netbox.signals import post_clean
 
-from .monitoring_models import MonitoringAssetOverride, MonitoringProfile, asset_models, assigned_assets
+from .assets import asset_models, is_asset_model
+from .monitoring_models import MonitoringAssetOverride, MonitoringProfile, assigned_assets
 from .monitoring_permissions import monitoring_request
-from .monitoring_schema import ASSET_MODELS, PROFILE_FIELD
+from .monitoring_schema import PROFILE_FIELD
 
 
 @receiver(post_clean, dispatch_uid="netbox_monitoring.validate_monitoring_profile")
 def validate_monitoring_profile(sender, instance, **kwargs):
-    if instance._meta.label_lower not in ASSET_MODELS:
+    if not is_asset_model(type(instance)):
         return
     value = instance.custom_field_data.get(PROFILE_FIELD)
     old = {}
@@ -90,7 +91,7 @@ def validate_profile_object_types(sender, instance, action, reverse, pk_set, **k
         else:
             selected = selected - {instance.pk} if reverse else set()
         types = list(ContentType.objects.filter(pk__in=selected))
-        if any(f"{ct.app_label}.{ct.model}" not in ASSET_MODELS for ct in types):
+        if any(not is_asset_model(ct.model_class()) for ct in types):
             raise ValidationError("Only supported monitoring asset object types may be selected.")
         labels = {f"{ct.app_label}.{ct.model}" for ct in types}
         if any(asset._meta.label_lower not in labels for asset in assigned_assets(profile)):

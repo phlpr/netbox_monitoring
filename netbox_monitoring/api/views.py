@@ -12,7 +12,7 @@ from rest_framework.permissions import SAFE_METHODS, BasePermission, IsAuthentic
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from ..assets import asset_config_url
+from ..assets import asset_config_url, asset_models, is_asset_model
 from ..models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
 from ..monitoring_filtersets import (
     MonitoringAssetOverrideFilterSet,
@@ -20,10 +20,10 @@ from ..monitoring_filtersets import (
     MonitoringCheckRuleFilterSet,
     MonitoringProfileFilterSet,
 )
-from ..monitoring_models import asset_models, assigned_assets
+from ..monitoring_models import assigned_assets
 from ..monitoring_permissions import can_manage_monitoring
 from ..monitoring_resolver import resolve_monitoring
-from ..monitoring_schema import ASSET_MODELS, PROFILE_FIELD
+from ..monitoring_schema import PROFILE_FIELD
 from .serializers import (
     MonitoringAssetOverrideSerializer,
     MonitoringCheckKeySerializer,
@@ -91,9 +91,12 @@ class MonitoringEffectiveView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request, object_type, pk):
-        if object_type not in ASSET_MODELS:
+        try:
+            model = apps.get_model(object_type)
+        except (LookupError, ValueError):
+            model = None
+        if not is_asset_model(model):
             raise NotFound("Unsupported monitoring asset type.")
-        model = apps.get_model(object_type)
         asset = get_object_or_404(model.objects.restrict(request.user, "view"), pk=pk)
         try:
             return Response(resolve_monitoring(asset, request.user))

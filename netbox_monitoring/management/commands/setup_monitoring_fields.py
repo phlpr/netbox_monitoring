@@ -1,30 +1,28 @@
-"""Add the native Device/VM profile selector without changing existing assets."""
+"""Add/extend the native profile selector without changing asset assignments."""
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from extras.models import CustomField
 
+from netbox_monitoring.assets import asset_object_types
 from netbox_monitoring.models import MonitoringProfile
-from netbox_monitoring.monitoring_schema import ASSET_MODELS, PROFILE_FIELD
+from netbox_monitoring.monitoring_schema import PROFILE_FIELD
 
 
 class Command(BaseCommand):
-    help = "Preview/create monitoring_profile as an object field on Devices and VMs."
+    help = "Preview/create/extend monitoring_profile on public object types supporting custom fields."
 
     def add_arguments(self, parser):
-        parser.add_argument("--apply", action="store_true", help="Create the field; default is a read-only preview.")
+        parser.add_argument("--apply", action="store_true", help="Apply changes; default is a read-only preview.")
 
     @transaction.atomic
     def handle(self, *args, **options):
         target = ContentType.objects.filter(
             app_label="netbox_monitoring", model=MonitoringProfile._meta.model_name
         ).first()
-        assets = [
-            ContentType.objects.filter(app_label=label.split(".")[0], model=label.split(".")[1]).first()
-            for label in ASSET_MODELS
-        ]
-        if target is None or any(ct is None for ct in assets):
+        assets = list(asset_object_types())
+        if target is None or not assets:
             raise CommandError("Required content types are missing. Run NetBox migrations first.")
         existing = CustomField.objects.filter(name=PROFILE_FIELD).first()
         if existing:
@@ -32,14 +30,26 @@ class Command(BaseCommand):
                 existing.type != "object"
                 or existing.related_object_type_id != target.pk
                 or existing.related_object_filter != {"status": "active"}
-                or not all(existing.object_types.filter(pk=ct.pk).exists() for ct in assets)
             ):
                 raise CommandError("An incompatible monitoring_profile field exists; review it manually.")
-            self.stdout.write("monitoring_profile already exists. No changes made.")
+            present = set(existing.object_types.values_list("pk", flat=True))
+            missing = [ct for ct in assets if ct.pk not in present]
+            if not missing:
+                self.stdout.write("monitoring_profile already exists. No changes made.")
+            elif not options["apply"]:
+                self.stdout.write(
+                    f"Would extend monitoring_profile to {len(missing)} additional object types. "
+                    "Run with --apply to update it."
+                )
+            else:
+                existing.object_types.add(*missing)
+                self.stdout.write(
+                    self.style.SUCCESS(f"Extended monitoring_profile to {len(missing)} additional object types.")
+                )
             return
         if not options["apply"]:
             self.stdout.write(
-                "Would create monitoring_profile: object → MonitoringProfile, Device + VM, "
+                f"Would create monitoring_profile: object → MonitoringProfile, {len(assets)} public object types, "
                 "active profiles only, no default. Run with --apply to create it."
             )
             return

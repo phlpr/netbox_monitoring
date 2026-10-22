@@ -3,7 +3,6 @@
 import json
 from urllib.parse import urlencode
 
-from django.apps import apps
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -11,14 +10,14 @@ from django.shortcuts import render
 from django.urls import reverse
 from netbox.views import generic
 from utilities.forms import restrict_form_fields
-from utilities.views import ViewTab, register_model_view
+from utilities.views import ViewTab, get_viewname, register_model_view
 
 from . import models
 from . import monitoring_filtersets as filters
 from . import monitoring_forms as forms
 from . import monitoring_tables as tables
-from .assets import asset_config_url
-from .monitoring_models import ASSET_MODELS, assigned_assets
+from .assets import asset_config_url, asset_models
+from .monitoring_models import assigned_assets
 from .monitoring_permissions import MonitoringWriteMixin, can_manage_monitoring
 from .monitoring_resolver import resolve_monitoring
 
@@ -215,9 +214,7 @@ def monitoring_tab_context(view, request, instance):
                         "profile": context["monitoring"]["profile"]["id"],
                         "assigned_object_type": ContentType.objects.get_for_model(instance).pk,
                         "assigned_object_id": instance.pk,
-                        "return_url": reverse(
-                            f"{instance._meta.app_label}:{instance._meta.model_name}_monitoring", args=[instance.pk]
-                        ),
+                        "return_url": reverse(get_viewname(instance, "monitoring"), args=[instance.pk]),
                     }
                 )
                 context["exception_add_url"] = (
@@ -231,8 +228,7 @@ def monitoring_tab_context(view, request, instance):
 
 
 def register_monitoring_tabs():
-    for label in ASSET_MODELS:
-        model = apps.get_model(label)
+    for model in asset_models():
         view = type(
             f"MonitoringTab_{model._meta.model_name}",
             (LoginRequiredMixin, generic.ObjectView),

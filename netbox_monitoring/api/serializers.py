@@ -1,17 +1,16 @@
 """Native serializers for object custom fields, events, and the REST API."""
 
 from dcim.api.serializers import PlatformSerializer
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Q
 from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import PrimaryModelSerializer
 from rest_framework import serializers
 
+from ..assets import asset_object_types, is_asset_model
 from ..choices import MonitoringProfileStatusChoices
 from ..models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
-from ..monitoring_schema import ASSET_MODELS, DEFAULTS
+from ..monitoring_schema import DEFAULTS
 
 
 class MonitoringSerializerMixin:
@@ -26,9 +25,8 @@ class MonitoringSerializerMixin:
                 ct = data.get("assigned_object_type", getattr(self.instance, "assigned_object_type", None))
                 asset_id = data.get("assigned_object_id", getattr(self.instance, "assigned_object_id", None))
                 if ct and asset_id:
-                    label = f"{ct.app_label}.{ct.model}"
                     if (
-                        label not in ASSET_MODELS
+                        not is_asset_model(ct.model_class())
                         or not ct.model_class().objects.restrict(request.user, "view").filter(pk=asset_id).exists()
                     ):
                         raise serializers.ValidationError(
@@ -48,9 +46,7 @@ class MonitoringProfileSerializer(MonitoringSerializerMixin, PrimaryModelSeriali
     platform = PlatformSerializer(nested=True, required=False, allow_null=True)
     status = ChoiceField(choices=MonitoringProfileStatusChoices, required=False)
     object_types = ContentTypeField(
-        queryset=ContentType.objects.filter(
-            Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine")
-        ),
+        queryset=asset_object_types(),
         many=True,
         required=False,
     )
@@ -136,11 +132,7 @@ class MonitoringAssetOverrideSerializer(MonitoringSerializerMixin, PrimaryModelS
     rule = MonitoringCheckRuleSerializer(nested=True, required=False, allow_null=True)
     key = MonitoringCheckKeySerializer(nested=True)
     check_type = serializers.CharField(read_only=True)
-    assigned_object_type = ContentTypeField(
-        queryset=ContentType.objects.filter(
-            Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine"),
-        )
-    )
+    assigned_object_type = ContentTypeField(queryset=asset_object_types())
     active = serializers.BooleanField(source="is_active", read_only=True)
 
     class Meta:

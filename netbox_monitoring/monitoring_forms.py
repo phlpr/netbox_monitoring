@@ -2,13 +2,17 @@
 
 from dcim.models import Platform
 from django import forms
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db.models import Q
 from django.urls import reverse
 from netbox.forms import NetBoxModelFilterSetForm, PrimaryModelBulkEditForm, PrimaryModelForm, PrimaryModelImportForm
 from utilities.exceptions import AbortRequest
-from utilities.forms.fields import ContentTypeMultipleChoiceField, CSVMultipleContentTypeField, DynamicModelChoiceField
+from utilities.forms.fields import (
+    ContentTypeChoiceField,
+    ContentTypeMultipleChoiceField,
+    CSVContentTypeField,
+    CSVMultipleContentTypeField,
+    DynamicModelChoiceField,
+)
 
 try:
     from utilities.forms.fields import ChoiceField
@@ -16,6 +20,7 @@ except ImportError:  # NetBox 4.6 uses Django's choice field.
     ChoiceField = forms.ChoiceField
 from utilities.forms.rendering import FieldSet
 
+from .assets import asset_object_types
 from .choices import MonitoringProfileStatusChoices
 from .models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
 from .monitoring_schema import CHECK_TYPES, DEFAULTS, METRICS, RECORD_TYPES, changed_parameters
@@ -34,9 +39,7 @@ class MonitoringProfileForm(MonitoringSaveFormMixin, PrimaryModelForm):
     status = ChoiceField(choices=MonitoringProfileStatusChoices, initial="active")
     object_types = ContentTypeMultipleChoiceField(
         label="Object type(s)",
-        queryset=ContentType.objects.filter(
-            Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine")
-        ),
+        queryset=asset_object_types(),
     )
     fieldsets = (
         FieldSet("name", "status", "object_types", "platform", "description", "tags", name="Monitoring Profile"),
@@ -49,7 +52,7 @@ class MonitoringProfileForm(MonitoringSaveFormMixin, PrimaryModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if not self.instance.pk and "object_types" not in self.initial:
-            self.initial["object_types"] = list(self.fields["object_types"].queryset.values_list("pk", flat=True))
+            self.initial["object_types"] = [ct.pk for ct in self.instance.selected_object_types()]
 
 
 class MonitoringCheckKeyForm(MonitoringSaveFormMixin, PrimaryModelForm):
@@ -182,11 +185,7 @@ class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMix
     rule = DynamicModelChoiceField(
         queryset=MonitoringCheckRule.objects.all(), required=False, query_params={"profile_id": "$profile"}
     )
-    assigned_object_type = forms.ModelChoiceField(
-        queryset=ContentType.objects.filter(
-            Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine"),
-        )
-    )
+    assigned_object_type = ContentTypeChoiceField(queryset=asset_object_types())
     key = DynamicModelChoiceField(
         queryset=MonitoringCheckKey.objects.all(),
         required=False,
@@ -240,11 +239,7 @@ class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMix
 
 
 class MonitoringProfileImportForm(MonitoringSaveFormMixin, PrimaryModelImportForm):
-    object_types = CSVMultipleContentTypeField(
-        queryset=ContentType.objects.filter(
-            Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine")
-        )
-    )
+    object_types = CSVMultipleContentTypeField(queryset=asset_object_types())
 
     class Meta:
         model = MonitoringProfile
@@ -266,6 +261,7 @@ class MonitoringCheckRuleImportForm(MonitoringSaveFormMixin, PrimaryModelImportF
 
 
 class MonitoringAssetOverrideImportForm(MonitoringSaveFormMixin, PrimaryModelImportForm):
+    assigned_object_type = CSVContentTypeField(queryset=asset_object_types())
     parameters = forms.JSONField(required=False)
 
     class Meta:
