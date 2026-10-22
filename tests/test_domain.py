@@ -9,7 +9,7 @@ from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from virtualization.models import VirtualMachine
 
-from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProfile
+from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
 from netbox_monitoring.monitoring_resolver import resolve_monitoring
 from netbox_monitoring.monitoring_schema import DEFAULTS, PROFILE_FIELD
 
@@ -79,8 +79,7 @@ class MonitoringDomainTests(MonitoringTestCase):
         with self.assertRaises(ValidationError):
             MonitoringCheckRule.objects.create(
                 profile=self.profile,
-                key="disk.other",
-                check_type="disk",
+                key=MonitoringCheckKey.objects.create(name="disk.other", check_type="disk"),
                 target="*",
                 parameters=DEFAULTS["disk"],
             )
@@ -89,7 +88,7 @@ class MonitoringDomainTests(MonitoringTestCase):
             self.rule.save()
         self.rule.refresh_from_db()
         self.assertEqual(self.rule.parameters["critical"], 90)
-        self.rule.key = "new.key"
+        self.rule.key = MonitoringCheckKey.objects.create(name="new.key", check_type="disk")
         with self.assertRaises(ValidationError):
             self.rule.save()
         with self.assertRaises(ProtectedError):
@@ -127,7 +126,9 @@ class MonitoringDomainTests(MonitoringTestCase):
         reader = self.user_with_permissions("profile-only", (VirtualMachine, MonitoringProfile))
         with self.assertRaises(PermissionDenied):
             resolve_monitoring(self.vm, reader)
-        reader = self.user_with_permissions("rules-reader", (VirtualMachine, MonitoringProfile, MonitoringCheckRule))
+        reader = self.user_with_permissions(
+            "rules-reader", (VirtualMachine, MonitoringProfile, MonitoringCheckRule, MonitoringCheckKey)
+        )
         self.assertTrue(resolve_monitoring(self.vm, reader)["configured"])
         override = self.make_override()
         with self.assertRaises(PermissionDenied):

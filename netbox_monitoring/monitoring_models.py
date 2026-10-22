@@ -40,7 +40,7 @@ class MonitoringModel(PrimaryModel):
         request = monitoring_request.get()
         if not request:
             return
-        for name in ("profile", "rule", "platform"):
+        for name in ("profile", "rule", "platform", "key"):
             related = getattr(self, name, None)
             if related and not type(related).objects.restrict(request.user, "view").filter(pk=related.pk).exists():
                 raise ValidationError({name: "View permission is required for the selected object."})
@@ -58,13 +58,18 @@ class MonitoringModel(PrimaryModel):
         # Serialize profile/rule/exception writes on the owning profile. This also
         # makes dependent override validation and the resulting write atomic.
         with transaction.atomic(using=kwargs.get("using") or self._state.db):
-            profile_id = self.pk if isinstance(self, MonitoringProfile) else self.profile_id
+            profile_id = self.pk if isinstance(self, MonitoringProfile) else getattr(self, "profile_id", None)
             profile_ids = {profile_id} if profile_id else set()
-            if self.pk and not isinstance(self, MonitoringProfile):
+            if self.pk and hasattr(self, "profile_id"):
                 previous = type(self).objects.filter(pk=self.pk).values_list("profile_id", flat=True).first()
                 if previous:
                     profile_ids.add(previous)
             list(MonitoringProfile.objects.select_for_update().filter(pk__in=profile_ids).order_by("pk"))
+            key_id = self.pk if isinstance(self, MonitoringCheckKey) else getattr(self, "key_id", None)
+            if key_id:
+                locked_key = MonitoringCheckKey.objects.select_for_update().get(pk=key_id)
+                if not isinstance(self, MonitoringCheckKey):
+                    self.key = locked_key
             self.full_clean()
             return super().save(*args, **kwargs)
 
@@ -130,22 +135,53 @@ class MonitoringProfile(MonitoringModel):
             return result
 
 
+class MonitoringCheckKey(MonitoringModel):
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        validators=[RegexValidator(r"^[a-z][a-z0-9_.-]*$", "Use a stable lowercase check key.")],
+    )
+    check_type = models.CharField(max_length=20, choices=CHECK_TYPES)
+    clone_fields = ("description", "check_type", "owner", "comments")
+
+    class Meta:
+        ordering = ("name",)
+        verbose_name = "Monitoring Check Key"
+        verbose_name_plural = "Monitoring Check Keys"
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        super().clean()
+        if self.pk:
+            old = type(self).objects.get(pk=self.pk)
+            if (old.name, old.check_type) != (self.name, self.check_type) and (
+                self.rules.exists() or self.asset_overrides.exists()
+            ):
+                raise ValidationError("A referenced key cannot change its stable name or check type. Create a new key.")
+
+
 class MonitoringRuleQuerySet(RestrictedQuerySet):
     def restrict(self, user, action="view"):
-        return super().restrict(user, action).filter(profile__in=MonitoringProfile.objects.restrict(user, "view"))
+        return (
+            super()
+            .restrict(user, action)
+            .filter(
+                profile__in=MonitoringProfile.objects.restrict(user, "view"),
+                key__in=MonitoringCheckKey.objects.restrict(user, "view"),
+            )
+        )
 
 
 class MonitoringCheckRule(MonitoringModel):
     objects = MonitoringRuleQuerySet.as_manager()
     profile = models.ForeignKey(MonitoringProfile, on_delete=models.CASCADE, related_name="checks")
-    key = models.CharField(
-        max_length=100, validators=[RegexValidator(r"^[a-z][a-z0-9_.-]*$", "Use a stable lowercase check key.")]
-    )
-    check_type = models.CharField(max_length=20, choices=CHECK_TYPES)
+    key = models.ForeignKey(MonitoringCheckKey, on_delete=models.PROTECT, related_name="rules")
     target = models.CharField(max_length=255, blank=True)
     parameters = models.JSONField(default=dict)
     enabled = models.BooleanField(default=True)
-    clone_fields = ("profile", "check_type", "target", "parameters", "enabled", "description", "comments")
+    clone_fields = ("profile", "key", "target", "parameters", "enabled", "description", "comments")
 
     class Meta:
         ordering = ("profile", "key")
@@ -156,17 +192,23 @@ class MonitoringCheckRule(MonitoringModel):
     def __str__(self):
         return f"{self.profile}: {self.key}"
 
+    @property
+    def check_type(self):
+        return self.key.check_type if self.key_id else ""
+
     def clean(self):
         super().clean()
+        if not self.key_id:
+            return
         validate_check(self.check_type, self.target, self.parameters)
         if not self.profile_id:
             return
         peers = type(self).objects.filter(profile_id=self.profile_id).exclude(pk=self.pk)
-        if peers.filter(check_type=self.check_type, target=self.target).exists():
+        if peers.filter(key__check_type=self.check_type, target=self.target).exists():
             raise ValidationError({"target": "This profile already contains a check of this type for this target."})
         if self.pk:
             old = type(self).objects.get(pk=self.pk)
-            if (old.profile_id, old.key) != (self.profile_id, self.key) and self.overrides.exists():
+            if (old.profile_id, old.key_id) != (self.profile_id, self.key_id) and self.overrides.exists():
                 raise ValidationError("A referenced check cannot change its profile or stable key.")
             for override in self.overrides.all():
                 if override.operation == "change":
@@ -175,7 +217,7 @@ class MonitoringCheckRule(MonitoringModel):
                     )
         if self.profile.overrides.filter(operation="add", key=self.key).exists():
             raise ValidationError({"key": "An asset exception already adds a check with this key."})
-        if self.profile.overrides.filter(operation="add", check_type=self.check_type, target=self.target).exists():
+        if self.profile.overrides.filter(operation="add", key__check_type=self.check_type, target=self.target).exists():
             raise ValidationError({"target": "An asset exception already adds this check target."})
 
 
@@ -189,8 +231,12 @@ class MonitoringOverrideQuerySet(RestrictedQuerySet):
                 assigned_object_type__model=model._meta.model_name,
                 assigned_object_id__in=model.objects.restrict(user, "view").values("pk"),
             )
-        return qs.filter(condition).filter(
-            models.Q(rule__isnull=True) | models.Q(rule__in=MonitoringCheckRule.objects.restrict(user, "view")),
+        return (
+            qs.filter(condition)
+            .filter(
+                models.Q(rule__isnull=True) | models.Q(rule__in=MonitoringCheckRule.objects.restrict(user, "view")),
+            )
+            .filter(key__in=MonitoringCheckKey.objects.restrict(user, "view"))
         )
 
 
@@ -203,11 +249,8 @@ class MonitoringAssetOverride(MonitoringModel):
     assigned_object_type = models.ForeignKey("contenttypes.ContentType", on_delete=models.PROTECT, related_name="+")
     assigned_object_id = models.PositiveBigIntegerField()
     assigned_object = GenericForeignKey("assigned_object_type", "assigned_object_id")
-    key = models.CharField(
-        max_length=100, validators=[RegexValidator(r"^[a-z][a-z0-9_.-]*$", "Use a stable lowercase check key.")]
-    )
+    key = models.ForeignKey(MonitoringCheckKey, on_delete=models.PROTECT, related_name="asset_overrides")
     operation = models.CharField(max_length=20, choices=OPERATIONS, default="change")
-    check_type = models.CharField(max_length=20, choices=CHECK_TYPES, blank=True)
     target = models.CharField(max_length=255, blank=True)
     parameters = models.JSONField(default=dict, blank=True)
     reason = models.TextField()
@@ -233,6 +276,10 @@ class MonitoringAssetOverride(MonitoringModel):
         return f"{self.profile}: {self.key} ({self.assigned_object_type.app_label}.{self.assigned_object_type.model}:{self.assigned_object_id})"
 
     @property
+    def check_type(self):
+        return self.key.check_type if self.key_id else ""
+
+    @property
     def is_active(self):
         return self.enabled and (self.expires_at is None or self.expires_at > timezone.now())
 
@@ -251,12 +298,14 @@ class MonitoringAssetOverride(MonitoringModel):
         if not self.reason.strip():
             raise ValidationError({"reason": "Explain why this exception is required."})
         if self.operation == "add":
+            if not self.key_id:
+                return
             if self.rule_id:
                 raise ValidationError({"rule": "Additional checks must not reference a base rule."})
             validate_check(self.check_type, self.target, self.parameters)
             if self.profile.checks.filter(key=self.key).exists():
                 raise ValidationError({"key": "This key is already used by a profile check."})
-            if self.profile.checks.filter(check_type=self.check_type, target=self.target).exists():
+            if self.profile.checks.filter(key__check_type=self.check_type, target=self.target).exists():
                 raise ValidationError({"target": "This target is already checked by the profile."})
             if (
                 type(self)
@@ -265,7 +314,7 @@ class MonitoringAssetOverride(MonitoringModel):
                     assigned_object_type=self.assigned_object_type,
                     assigned_object_id=self.assigned_object_id,
                     operation="add",
-                    check_type=self.check_type,
+                    key__check_type=self.check_type,
                     target=self.target,
                 )
                 .exclude(pk=self.pk)
@@ -275,10 +324,10 @@ class MonitoringAssetOverride(MonitoringModel):
         else:
             if not self.rule_id or self.rule.profile_id != self.profile_id:
                 raise ValidationError({"rule": "Select a check belonging to this profile."})
-            if self.key != self.rule.key:
+            if self.key_id != self.rule.key_id:
                 raise ValidationError({"key": "Use the stable key of the selected profile check."})
-            if self.check_type or self.target:
-                raise ValidationError("Type and target are defined by the base rule; leave them empty.")
+            if self.target:
+                raise ValidationError("Target is defined by the base rule; leave it empty.")
             if self.operation == "disable":
                 if self.parameters:
                     raise ValidationError({"parameters": "Disabling a check must not also change parameters."})

@@ -10,7 +10,7 @@ from django.test import TestCase, override_settings
 from users.models import ObjectPermission
 from virtualization.models import VirtualMachine
 
-from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProfile
+from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
 from netbox_monitoring.monitoring_schema import DEFAULTS, PROFILE_FIELD
 
 
@@ -21,10 +21,10 @@ class MonitoringTestCase(TestCase):
         call_command("setup_monitoring_fields", apply=True, stdout=StringIO())
         cls.admin = get_user_model().objects.create_superuser(username="monitoring-admin")
         cls.profile = MonitoringProfile.objects.create(name="Linux Standard")
+        cls.check_key = MonitoringCheckKey.objects.create(name="disk.all", check_type="disk")
         cls.rule = MonitoringCheckRule.objects.create(
             profile=cls.profile,
-            key="disk.all",
-            check_type="disk",
+            key=cls.check_key,
             target="*",
             parameters=deepcopy(DEFAULTS["disk"]),
         )
@@ -60,6 +60,11 @@ class MonitoringTestCase(TestCase):
             "parameters": {"warning": 85},
             "reason": "Temporary capacity exception",
         }
+        kind = kwargs.pop("check_type", None)
+        if isinstance(kwargs.get("key"), str):
+            kwargs["key"], _ = MonitoringCheckKey.objects.get_or_create(
+                name=kwargs["key"], defaults={"check_type": kind or "disk"}
+            )
         return MonitoringAssetOverride.objects.create(**(values | kwargs))
 
     def user_with_permissions(self, name, models, actions=("view",), constraints=None):

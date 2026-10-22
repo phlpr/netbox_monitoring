@@ -17,7 +17,7 @@ except ImportError:  # NetBox 4.6 uses Django's choice field.
 from utilities.forms.rendering import FieldSet
 
 from .choices import MonitoringProfileStatusChoices
-from .models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProfile
+from .models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
 from .monitoring_schema import CHECK_TYPES, DEFAULTS, METRICS, RECORD_TYPES, changed_parameters
 
 
@@ -52,10 +52,26 @@ class MonitoringProfileForm(MonitoringSaveFormMixin, PrimaryModelForm):
             self.initial["object_types"] = list(self.fields["object_types"].queryset.values_list("pk", flat=True))
 
 
+class MonitoringCheckKeyForm(MonitoringSaveFormMixin, PrimaryModelForm):
+    fieldsets = (FieldSet("name", "check_type", "description", "tags", name="Monitoring Check Key"),)
+
+    class Meta:
+        model = MonitoringCheckKey
+        fields = ("name", "check_type", "description", "owner", "comments", "tags")
+
+
 class CheckParameterFormMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        kind = self.initial.get("check_type") or getattr(self.instance, "check_type", "") or "disk"
+        kind = getattr(self.instance, "check_type", "")
+        key_id = self.data.get(self.add_prefix("key")) if self.is_bound else self.initial.get("key")
+        if key_id:
+            try:
+                selected_key = MonitoringCheckKey.objects.filter(pk=getattr(key_id, "pk", key_id)).first()
+            except (ValueError, TypeError):
+                selected_key = None
+            if selected_key:
+                kind = selected_key.check_type
         base = DEFAULTS.get(kind, {})
         if isinstance(self.instance, MonitoringAssetOverride) and self.instance.rule_id:
             kind = self.instance.rule.check_type
@@ -66,8 +82,13 @@ class CheckParameterFormMixin:
             if key in self.fields:
                 self.initial[key] = "\n".join(value) if isinstance(value, list) else value
         self.initial["parameter_kind"] = kind
-        if "check_type" in self.fields:
-            self.fields["check_type"].widget.attrs["data-monitoring-type"] = ""
+        self.fields["parameter_kind"].widget.attrs["data-monitoring-kind"] = ""
+        self.fields["key"].widget.attrs.update(
+            {
+                "data-monitoring-key": "",
+                "data-monitoring-keys-url": reverse("plugins-api:netbox_monitoring-api:monitoringcheckkey-list"),
+            }
+        )
         if "rule" in self.fields:
             self.fields["rule"].widget.attrs["data-monitoring-rule"] = ""
             self.fields["rule"].widget.attrs["data-monitoring-rules-url"] = reverse(
@@ -142,14 +163,15 @@ class ParameterFields(forms.Form):
 
 class MonitoringCheckRuleForm(CheckParameterFormMixin, MonitoringSaveFormMixin, PrimaryModelForm, ParameterFields):
     profile = DynamicModelChoiceField(queryset=MonitoringProfile.objects.all())
+    key = DynamicModelChoiceField(queryset=MonitoringCheckKey.objects.all(), quick_add=True)
 
     class Meta:
         model = MonitoringCheckRule
-        fields = ("profile", "key", "check_type", "target", "parameters", "enabled", "description", "comments", "tags")
+        fields = ("profile", "key", "target", "parameters", "enabled", "description", "comments", "tags")
 
     def clean(self):
         data = super().clean() or self.cleaned_data
-        kind = data.get("check_type")
+        kind = data["key"].check_type if data.get("key") else None
         if kind:
             data["parameters"] = self.build_parameters(kind, data)
         return data
@@ -163,8 +185,10 @@ class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMix
             Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine"),
         )
     )
-    key = forms.CharField(
-        max_length=100, required=False, help_text="For changes/disabling this is taken from the selected rule."
+    key = DynamicModelChoiceField(
+        queryset=MonitoringCheckKey.objects.all(),
+        required=False,
+        help_text="For changes/disabling this is taken from the selected rule.",
     )
 
     class Meta:
@@ -176,7 +200,6 @@ class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMix
             "operation",
             "rule",
             "key",
-            "check_type",
             "target",
             "parameters",
             "reason",
@@ -194,7 +217,7 @@ class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMix
         operation = data.get("operation")
         if operation in ("change", "disable") and rule:
             data["key"] = rule.key
-            data["check_type"], data["target"] = "", ""
+            data["target"] = ""
             if operation == "disable":
                 data["parameters"] = {}
             else:
@@ -209,8 +232,8 @@ class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMix
                 data["parameters"] = {
                     k: v for k, v in params.items() if v != rule.parameters.get(k) or k in existing_keys
                 }
-        elif operation == "add" and data.get("check_type"):
-            data["parameters"] = self.build_parameters(data["check_type"], data)
+        elif operation == "add" and data.get("key"):
+            data["parameters"] = self.build_parameters(data["key"].check_type, data)
         return data
 
 
@@ -226,12 +249,18 @@ class MonitoringProfileImportForm(MonitoringSaveFormMixin, PrimaryModelImportFor
         fields = ("name", "description", "status", "object_types", "platform", "comments")
 
 
+class MonitoringCheckKeyImportForm(MonitoringSaveFormMixin, PrimaryModelImportForm):
+    class Meta:
+        model = MonitoringCheckKey
+        fields = ("name", "check_type", "description", "comments")
+
+
 class MonitoringCheckRuleImportForm(MonitoringSaveFormMixin, PrimaryModelImportForm):
     parameters = forms.JSONField()
 
     class Meta:
         model = MonitoringCheckRule
-        fields = ("profile", "key", "check_type", "target", "parameters", "enabled", "description", "comments")
+        fields = ("profile", "key", "target", "parameters", "enabled", "description", "comments")
 
 
 class MonitoringAssetOverrideImportForm(MonitoringSaveFormMixin, PrimaryModelImportForm):
@@ -246,7 +275,6 @@ class MonitoringAssetOverrideImportForm(MonitoringSaveFormMixin, PrimaryModelImp
             "operation",
             "rule",
             "key",
-            "check_type",
             "target",
             "parameters",
             "reason",
@@ -271,6 +299,11 @@ class MonitoringCheckRuleFilterForm(NetBoxModelFilterSetForm):
     check_type = forms.ChoiceField(choices=(("", "---------"),) + CHECK_TYPES, required=False)
 
 
+class MonitoringCheckKeyFilterForm(NetBoxModelFilterSetForm):
+    model = MonitoringCheckKey
+    check_type = forms.ChoiceField(choices=(("", "---------"),) + CHECK_TYPES, required=False)
+
+
 class MonitoringAssetOverrideFilterForm(NetBoxModelFilterSetForm):
     model = MonitoringAssetOverride
     profile_id = DynamicModelChoiceField(queryset=MonitoringProfile.objects.all(), required=False)
@@ -290,6 +323,10 @@ class MonitoringProfileBulkEditForm(MonitoringBulkEditForm):
 class MonitoringCheckRuleBulkEditForm(MonitoringBulkEditForm):
     model = MonitoringCheckRule
     enabled = forms.NullBooleanField(required=False)
+
+
+class MonitoringCheckKeyBulkEditForm(MonitoringBulkEditForm):
+    model = MonitoringCheckKey
 
 
 class MonitoringAssetOverrideBulkEditForm(MonitoringBulkEditForm):

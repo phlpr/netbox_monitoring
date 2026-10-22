@@ -32,7 +32,12 @@ def resolve_monitoring(asset, user, now=None):
         raise PermissionDenied("The monitoring profile is missing or not visible.")
     if not profile.accepts(asset):
         raise ValidationError("The monitoring profile is incompatible with this asset.")
-    rules = list(MonitoringCheckRule.objects.restrict(user, "view").filter(profile=profile).order_by("key"))
+    rules = list(
+        MonitoringCheckRule.objects.restrict(user, "view")
+        .filter(profile=profile)
+        .select_related("key")
+        .order_by("key__name")
+    )
     if len(rules) != profile.checks.count():
         raise PermissionDenied("A complete configuration requires view permission for every profile check.")
     ct = ContentType.objects.get_for_model(asset)
@@ -42,14 +47,14 @@ def resolve_monitoring(asset, user, now=None):
         assigned_object_id=asset.pk,
         enabled=True,
     ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
-    overrides = list(active.restrict(user, "view").select_related("rule").order_by("key"))
+    overrides = list(active.restrict(user, "view").select_related("rule", "key").order_by("key__name"))
     if len(overrides) != active.count():
         raise PermissionDenied("A complete configuration requires view permission for every active exception.")
     checks = {}
     for rule in rules:
         validate_check(rule.check_type, rule.target, rule.parameters)
-        checks[rule.key] = {
-            "key": rule.key,
+        checks[rule.key.name] = {
+            "key": rule.key.name,
             "check_type": rule.check_type,
             "target": rule.target,
             "parameters": deepcopy(rule.parameters),
@@ -58,10 +63,10 @@ def resolve_monitoring(asset, user, now=None):
         }
     for override in overrides:
         if override.operation == "add":
-            if override.key in checks:
+            if override.key.name in checks:
                 raise ValidationError(f"Exception key collision: {override.key}.")
-            checks[override.key] = {
-                "key": override.key,
+            checks[override.key.name] = {
+                "key": override.key.name,
                 "check_type": override.check_type,
                 "target": override.target,
                 "parameters": deepcopy(override.parameters),
@@ -69,14 +74,14 @@ def resolve_monitoring(asset, user, now=None):
                 "source": {"profile_id": profile.pk},
             }
         else:
-            check = checks.get(override.key)
+            check = checks.get(override.key.name)
             if check is None or check["source"]["rule_id"] != override.rule_id:
                 raise ValidationError("An exception refers to a missing or different profile check.")
             if override.operation == "disable":
                 check["enabled"] = False
             else:
                 check["parameters"] = changed_parameters(check["parameters"], override.parameters)
-        check = checks[override.key]
+        check = checks[override.key.name]
         validate_check(check["check_type"], check["target"], check["parameters"])
         check["source"].update(
             {

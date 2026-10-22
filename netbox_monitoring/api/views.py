@@ -10,9 +10,10 @@ from rest_framework.permissions import SAFE_METHODS, BasePermission, IsAuthentic
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from ..models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProfile
+from ..models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
 from ..monitoring_filtersets import (
     MonitoringAssetOverrideFilterSet,
+    MonitoringCheckKeyFilterSet,
     MonitoringCheckRuleFilterSet,
     MonitoringProfileFilterSet,
 )
@@ -20,7 +21,12 @@ from ..monitoring_models import assigned_assets
 from ..monitoring_permissions import can_manage_monitoring
 from ..monitoring_resolver import resolve_monitoring
 from ..monitoring_schema import ASSET_MODELS
-from .serializers import MonitoringAssetOverrideSerializer, MonitoringCheckRuleSerializer, MonitoringProfileSerializer
+from .serializers import (
+    MonitoringAssetOverrideSerializer,
+    MonitoringCheckKeySerializer,
+    MonitoringCheckRuleSerializer,
+    MonitoringProfileSerializer,
+)
 
 
 class MonitoringMaintenancePermission(BasePermission):
@@ -54,14 +60,20 @@ class MonitoringProfileViewSet(MonitoringViewSet):
         )
 
 
+class MonitoringCheckKeyViewSet(MonitoringViewSet):
+    queryset = MonitoringCheckKey.objects.all()
+    serializer_class = MonitoringCheckKeySerializer
+    filterset_class = MonitoringCheckKeyFilterSet
+
+
 class MonitoringCheckRuleViewSet(MonitoringViewSet):
-    queryset = MonitoringCheckRule.objects.select_related("profile")
+    queryset = MonitoringCheckRule.objects.select_related("profile", "key")
     serializer_class = MonitoringCheckRuleSerializer
     filterset_class = MonitoringCheckRuleFilterSet
 
 
 class MonitoringAssetOverrideViewSet(MonitoringViewSet):
-    queryset = MonitoringAssetOverride.objects.select_related("profile", "rule", "assigned_object_type")
+    queryset = MonitoringAssetOverride.objects.select_related("profile", "rule", "key", "assigned_object_type")
     serializer_class = MonitoringAssetOverrideSerializer
     filterset_class = MonitoringAssetOverrideFilterSet
 

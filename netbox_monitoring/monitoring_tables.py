@@ -5,7 +5,7 @@ import json
 import django_tables2 as tables
 from netbox.tables import PrimaryModelTable, columns
 
-from .models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProfile
+from .models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
 
 
 class MonitoringProfileTable(PrimaryModelTable):
@@ -33,8 +33,29 @@ class MonitoringProfileTable(PrimaryModelTable):
         default_columns = ("name", "status", "object_types", "platform", "description")
 
 
+class MonitoringCheckKeyTable(PrimaryModelTable):
+    name = tables.Column(linkify=True)
+
+    class Meta(PrimaryModelTable.Meta):
+        model = MonitoringCheckKey
+        fields = (
+            "pk",
+            "id",
+            "name",
+            "description",
+            "check_type",
+            "owner",
+            "comments",
+            "created",
+            "last_updated",
+            "actions",
+        )
+        default_columns = ("name", "description", "check_type")
+
+
 class MonitoringCheckRuleTable(PrimaryModelTable):
-    key = tables.Column(linkify=True)
+    key = tables.Column(linkify=lambda record: record.get_absolute_url())
+    check_type = tables.Column(order_by="key__check_type")
     profile = tables.Column(linkify=True)
     enabled = columns.BooleanColumn()
     parameters = tables.Column()
@@ -66,7 +87,8 @@ class MonitoringCheckRuleTable(PrimaryModelTable):
 
 
 class MonitoringAssetOverrideTable(PrimaryModelTable):
-    key = tables.Column(linkify=True)
+    key = tables.Column(linkify=lambda record: record.get_absolute_url())
+    check_type = tables.Column(order_by="key__check_type")
     profile = tables.Column(linkify=True)
     rule = tables.Column(linkify=True)
     enabled = columns.BooleanColumn()

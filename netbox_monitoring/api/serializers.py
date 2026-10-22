@@ -10,15 +10,15 @@ from netbox.api.serializers import PrimaryModelSerializer
 from rest_framework import serializers
 
 from ..choices import MonitoringProfileStatusChoices
-from ..models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProfile
-from ..monitoring_schema import ASSET_MODELS
+from ..models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from ..monitoring_schema import ASSET_MODELS, DEFAULTS
 
 
 class MonitoringSerializerMixin:
     def validate(self, data):
         request = self.context.get("request")
         if request and not self.nested:
-            for key in ("profile", "rule", "platform"):
+            for key in ("profile", "rule", "platform", "key"):
                 related = data.get(key, getattr(self.instance, key, None) if self.instance else None)
                 if related and not type(related).objects.restrict(request.user, "view").filter(pk=related.pk).exists():
                     raise serializers.ValidationError({key: "View permission is required for the selected object."})
@@ -76,8 +76,38 @@ class MonitoringProfileSerializer(MonitoringSerializerMixin, PrimaryModelSeriali
         brief_fields = ("id", "url", "display", "name")
 
 
+class MonitoringCheckKeySerializer(MonitoringSerializerMixin, PrimaryModelSerializer):
+    default_parameters = serializers.SerializerMethodField()
+
+    def get_default_parameters(self, obj):
+        from copy import deepcopy
+
+        return deepcopy(DEFAULTS[obj.check_type])
+
+    class Meta:
+        model = MonitoringCheckKey
+        fields = (
+            "id",
+            "url",
+            "display",
+            "name",
+            "check_type",
+            "description",
+            "default_parameters",
+            "owner",
+            "comments",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "name", "check_type")
+
+
 class MonitoringCheckRuleSerializer(MonitoringSerializerMixin, PrimaryModelSerializer):
     profile = MonitoringProfileSerializer(nested=True)
+    key = MonitoringCheckKeySerializer(nested=True)
+    check_type = serializers.CharField(read_only=True)
 
     class Meta:
         model = MonitoringCheckRule
@@ -104,6 +134,8 @@ class MonitoringCheckRuleSerializer(MonitoringSerializerMixin, PrimaryModelSeria
 class MonitoringAssetOverrideSerializer(MonitoringSerializerMixin, PrimaryModelSerializer):
     profile = MonitoringProfileSerializer(nested=True)
     rule = MonitoringCheckRuleSerializer(nested=True, required=False, allow_null=True)
+    key = MonitoringCheckKeySerializer(nested=True)
+    check_type = serializers.CharField(read_only=True)
     assigned_object_type = ContentTypeField(
         queryset=ContentType.objects.filter(
             Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine"),

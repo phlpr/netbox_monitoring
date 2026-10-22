@@ -4,8 +4,8 @@ Manage desired monitoring configuration in NetBox using reusable profiles, typed
 checks, and justified exceptions for individual devices and virtual machines.
 
 This standalone plugin extracts the monitoring functionality from
-`netbox_aesai` (`0.7.0.dev2`). It retains its check parameters, resolver output,
-central maintenance permissions, and native NetBox integration. It has no runtime
+`netbox_aesai` (`0.7.0.dev2`). It retains its check semantics, central maintenance permissions, and native NetBox
+integration, with native profile fields and a shared check key catalog. It has no runtime
 dependency on AESAI, Nagios, or op5.
 
 ## Status and compatibility
@@ -24,6 +24,8 @@ are outside this initial implementation.
   custom field when creating or editing a Device or Virtual Machine.
 - Profiles restricted by native Object type(s) and optional platform. Retired profiles can
   remain effective for existing assignments while being hidden from new choices.
+- A globally unique check key catalog with descriptions and a single check type
+  per key, shared across profiles and exceptions.
 - Disk, CPU, memory, DNS, and process/service checks with validated JSON parameters
   and human-readable forms.
 - Per-asset `change`, `add`, and `disable` exceptions, with a required reason,
@@ -96,6 +98,7 @@ Create the configured **Monitoring Administrators** group in NetBox and grant it
 members the appropriate native model/object permissions for:
 
 - `netbox_monitoring.monitoringprofile`
+- `netbox_monitoring.monitoringcheckkey`
 - `netbox_monitoring.monitoringcheckrule`
 - `netbox_monitoring.monitoringassetoverride`
 
@@ -121,12 +124,17 @@ changing asset assignments. Ownership is rendered in the native Ownership sectio
 
 ## Configuration example
 
-Create the profile `Linux Standard`, then add a rule:
+Create a Check Key named `disk.all`, select type `disk`, and describe its purpose.
+The type determines parameter validation and form fields. Referenced keys cannot
+change their stable name or type; descriptions remain editable. The same key can
+be used by multiple profiles.
+
+Create the profile `Linux Standard`, then add a rule referencing that key (the
+REST API accepts its ID or a lookup such as `{"name": "disk.all"}`):
 
 ```json
 {
-  "key": "disk.all",
-  "check_type": "disk",
+  "key": {"name": "disk.all"},
   "target": "*",
   "parameters": {
     "metric": "used_percent",
@@ -143,9 +151,12 @@ Assign that profile to two VMs. For one VM, add a `change` exception referencing
 and Critical 90. A subsequent change of the profile's Critical threshold is
 inherited by both VMs, while the exception's explicit Warning remains 85.
 
-Keys identify rules and exception references. Targets identify what is checked.
+Keys identify rules and exception references. Key names are globally unique;
+select them from Check Keys instead of entering free text. Check type is stored
+only on the key and exposed as a derived, read-only API field on rules and
+exceptions. The resolved export keeps string key names and the check type. Targets identify what is checked.
 Changes merge only at the top parameter level; lists are replaced in full. A
-`change` cannot alter type or target. An `add` supplies its own type and target;
+`change` cannot alter type or target. An `add` selects its own catalog key and target;
 `disable` references an existing rule and carries no parameter changes.
 
 ### Check parameters
@@ -184,6 +195,7 @@ All endpoints require authentication and use normal NetBox API tokens:
 ```text
 /api/plugins/monitoring/monitoring-profiles/
 /api/plugins/monitoring/monitoring-profiles/<id>/impact/
+/api/plugins/monitoring/monitoring-check-keys/
 /api/plugins/monitoring/monitoring-check-rules/
 /api/plugins/monitoring/monitoring-asset-overrides/
 /api/plugins/monitoring/monitoring-effective/dcim.device/<id>/
@@ -202,6 +214,12 @@ Profile impact reports include only assets visible to the caller. The exception
 API supports `active=true` / `active=false` filtering in addition to the stored
 `enabled` flag. Native serializers are exposed from
 `netbox_monitoring.api.serializers` for Object custom fields and NetBox events.
+
+Existing standalone-plugin free-text keys are migrated to catalog entries.
+Repeated names with the same type share an entry. A repeated name with conflicting
+types stops the migration and must be resolved first. Rule/exception IDs,
+parameters, and effective string key names are retained. Schema and key data
+migrations support reversal.
 
 ## Moving an existing AESAI installation
 
@@ -247,7 +265,8 @@ export MONITORING_BASE_CONFIGURATION=/path/to/netbox/netbox/netbox/configuration
 
 The test configuration always uses **test_netbox_monitoring** for the database
 and Redis databases **12** and **13**, and enables only this plugin. The database
-account needs permission to create the test database. Run tests sequentially
+account needs permission to create the test database. Set `MONITORING_TEST_DATABASE=test_netbox_monitoring_<suffix>` to isolate additional
+NetBox version runs. Run tests sequentially
 against these shared test services. Without a base configuration, the connection
 settings from NetBox's `configuration_testing.py` are used.
 

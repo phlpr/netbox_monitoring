@@ -3,6 +3,7 @@ from netbox.api.routers import NetBoxRouter
 
 from .views import (
     MonitoringAssetOverrideViewSet,
+    MonitoringCheckKeyViewSet,
     MonitoringCheckRuleViewSet,
     MonitoringEffectiveView,
     MonitoringProfileViewSet,
@@ -10,6 +11,7 @@ from .views import (
 
 router = NetBoxRouter()
 router.register("monitoring-profiles", MonitoringProfileViewSet)
+router.register("monitoring-check-keys", MonitoringCheckKeyViewSet)
 router.register("monitoring-check-rules", MonitoringCheckRuleViewSet)
 router.register("monitoring-asset-overrides", MonitoringAssetOverrideViewSet)
 urlpatterns = router.urls + [

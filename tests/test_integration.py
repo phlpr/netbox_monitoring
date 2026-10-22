@@ -21,7 +21,7 @@ from virtualization.forms import VirtualMachineForm
 from virtualization.models import VirtualMachine
 
 from netbox_monitoring.api.serializers import MonitoringAssetOverrideSerializer, MonitoringProfileSerializer
-from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProfile
+from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
 from netbox_monitoring.monitoring_forms import MonitoringAssetOverrideForm, MonitoringCheckRuleForm
 from netbox_monitoring.monitoring_permissions import MonitoringRequestMiddleware, monitoring_request
 from netbox_monitoring.monitoring_schema import DEFAULTS, PROFILE_FIELD
@@ -97,7 +97,7 @@ class MonitoringIntegrationTests(MonitoringTestCase):
             {
                 "profile": self.profile.pk,
                 "rule": self.rule.pk,
-                "key": "disk.all",
+                "key": self.rule.key_id,
                 "operation": "change",
                 "assigned_object_type": "virtualization.virtualmachine",
                 "assigned_object_id": self.vm.pk,
@@ -131,6 +131,7 @@ class MonitoringIntegrationTests(MonitoringTestCase):
     def test_list_detail_forms_tabs_journal_and_changelog_render(self):
         for model, instance in (
             ("monitoringprofile", self.profile),
+            ("monitoringcheckkey", self.check_key),
             ("monitoringcheckrule", self.rule),
             ("monitoringassetoverride", self.make_override()),
         ):
@@ -179,11 +180,11 @@ class MonitoringIntegrationTests(MonitoringTestCase):
         )
 
     def test_human_forms_store_only_explicit_parameter_changes(self):
+        cpu = MonitoringCheckKey.objects.create(name="cpu.asset", check_type="cpu")
         form = MonitoringCheckRuleForm(
             data={
                 "profile": self.profile.pk,
-                "key": "cpu.asset",
-                "check_type": "cpu",
+                "key": cpu.pk,
                 "target": "",
                 "metric": "utilization_percent",
                 "warning": 80,
@@ -254,7 +255,7 @@ class MonitoringIntegrationTests(MonitoringTestCase):
 class MonitoringPermissionTests(MonitoringTestCase):
     def test_central_group_and_native_model_permissions_are_both_required(self):
         group = Group.objects.create(name="Monitoring Administrators")
-        models = (MonitoringProfile, MonitoringCheckRule, MonitoringAssetOverride, VirtualMachine)
+        models = (MonitoringProfile, MonitoringCheckKey, MonitoringCheckRule, MonitoringAssetOverride, VirtualMachine)
         plain = self.user_with_permissions("model-admin", models, ("view", "add", "change", "delete"))
         member = self.user_with_permissions("central-admin", models, ("view", "add", "change", "delete"))
         member.groups.add(group)
@@ -276,7 +277,7 @@ class MonitoringPermissionTests(MonitoringTestCase):
     @override_settings(LOGIN_REQUIRED=False, EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_anonymous_reads_are_denied_even_with_public_netbox(self):
         api = APIClient()
-        for model in ("monitoringprofile", "monitoringcheckrule", "monitoringassetoverride"):
+        for model in ("monitoringprofile", "monitoringcheckkey", "monitoringcheckrule", "monitoringassetoverride"):
             self.assertIn(api.get(api_url(model)).status_code, (401, 403))
             self.assertEqual(self.client.get(ui_url(model)).status_code, 302)
 
@@ -299,7 +300,7 @@ class MonitoringPermissionTests(MonitoringTestCase):
             data={
                 "profile": self.profile.pk,
                 "rule": self.rule.pk,
-                "key": self.rule.key,
+                "key": self.rule.key_id,
                 "assigned_object_type": "virtualization.virtualmachine",
                 "assigned_object_id": self.vm.pk,
                 "operation": "change",

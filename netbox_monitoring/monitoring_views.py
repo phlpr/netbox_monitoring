@@ -23,6 +23,14 @@ class MonitoringObjectView(LoginRequiredMixin, generic.ObjectView):
     template_name = "netbox_monitoring/monitoring_object.html"
 
     def get_extra_context(self, request, instance):
+        if isinstance(instance, models.MonitoringCheckKey):
+            return {
+                "detail_rows": [
+                    ("Name", instance.name),
+                    ("Check Type", instance.get_check_type_display()),
+                    ("Description", instance.description),
+                ]
+            }
         names = (
             ("name", "description", "status", "object_types", "platform")
             if isinstance(instance, models.MonitoringProfile)
@@ -76,7 +84,7 @@ class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.Objec
         profile = (
             instance
             if isinstance(instance, models.MonitoringProfile)
-            else (instance.profile if instance.profile_id else None)
+            else (instance.profile if getattr(instance, "profile_id", None) else None)
         )
         return {"affected_assets": list(assigned_assets(profile, request.user)) if profile and profile.pk else []}
 
@@ -113,7 +121,12 @@ class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.Objec
 
 
 # Separate classes preserve conventional model/action names for NetBox links.
-for model in (models.MonitoringProfile, models.MonitoringCheckRule, models.MonitoringAssetOverride):
+for model in (
+    models.MonitoringProfile,
+    models.MonitoringCheckKey,
+    models.MonitoringCheckRule,
+    models.MonitoringAssetOverride,
+):
     name = model.__name__
     queryset = model.objects.all()
     globals()[f"{name}View"] = type(f"{name}View", (MonitoringObjectView,), {"queryset": queryset})
