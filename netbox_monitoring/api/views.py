@@ -6,10 +6,13 @@ from django.shortcuts import get_object_or_404
 from netbox.api.viewsets import NetBoxModelViewSet
 from rest_framework import serializers
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
+from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import SAFE_METHODS, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from ..assets import asset_config_url
 from ..models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
 from ..monitoring_filtersets import (
     MonitoringAssetOverrideFilterSet,
@@ -17,10 +20,10 @@ from ..monitoring_filtersets import (
     MonitoringCheckRuleFilterSet,
     MonitoringProfileFilterSet,
 )
-from ..monitoring_models import assigned_assets
+from ..monitoring_models import asset_models, assigned_assets
 from ..monitoring_permissions import can_manage_monitoring
 from ..monitoring_resolver import resolve_monitoring
-from ..monitoring_schema import ASSET_MODELS
+from ..monitoring_schema import ASSET_MODELS, PROFILE_FIELD
 from .serializers import (
     MonitoringAssetOverrideSerializer,
     MonitoringCheckKeySerializer,
@@ -54,7 +57,13 @@ class MonitoringProfileViewSet(MonitoringViewSet):
                 "profile_id": profile.pk,
                 "visible_asset_count": len(assets),
                 "assets": [
-                    {"object_type": asset._meta.label_lower, "id": asset.pk, "name": str(asset)} for asset in assets
+                    {
+                        "object_type": asset._meta.label_lower,
+                        "id": asset.pk,
+                        "name": str(asset),
+                        "config_url": asset_config_url(asset, request),
+                    }
+                    for asset in assets
                 ],
             }
         )
@@ -83,8 +92,6 @@ class MonitoringEffectiveView(APIView):
 
     def get(self, request, object_type, pk):
         if object_type not in ASSET_MODELS:
-            from rest_framework.exceptions import NotFound
-
             raise NotFound("Unsupported monitoring asset type.")
         model = apps.get_model(object_type)
         asset = get_object_or_404(model.objects.restrict(request.user, "view"), pk=pk)
@@ -92,3 +99,45 @@ class MonitoringEffectiveView(APIView):
             return Response(resolve_monitoring(asset, request.user))
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.messages)
+
+
+class MonitoringAssetConfigView(MonitoringEffectiveView):
+    """One authenticated GET returns the complete configuration for an asset."""
+
+    def get(self, request, object_type, pk):
+        response = super().get(request, object_type, pk)
+        if not response.data["configured"]:
+            raise NotFound("Monitoring is not configured for this asset.")
+        return response
+
+
+class MonitoringAssetListView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        profiles = {profile.pk: profile for profile in MonitoringProfile.objects.restrict(request.user, "view")}
+        assets = []
+        for model in asset_models():
+            queryset = (
+                model.objects.restrict(request.user, "view")
+                .filter(**{f"custom_field_data__{PROFILE_FIELD}__isnull": False})
+                .exclude(**{f"custom_field_data__{PROFILE_FIELD}": None})
+                .order_by("pk")
+            )
+            for asset in queryset:
+                profile = profiles.get(asset.custom_field_data.get(PROFILE_FIELD))
+                if profile is not None:
+                    assets.append(
+                        {
+                            "object_type": asset._meta.label_lower,
+                            "id": asset.pk,
+                            "name": str(asset),
+                            "profile": {"id": profile.pk, "name": profile.name, "status": profile.status},
+                            "config_url": asset_config_url(asset, request),
+                        }
+                    )
+        paginator = LimitOffsetPagination()
+        paginator.default_limit = 50
+        paginator.max_limit = 1000
+        page = paginator.paginate_queryset(assets, request, view=self)
+        return paginator.get_paginated_response(page)

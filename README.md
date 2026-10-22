@@ -10,9 +10,9 @@ dependency on AESAI, Nagios, or op5.
 
 ## Status and compatibility
 
-Initial development version: **0.1.0.dev1**. Minimum NetBox version: **4.6.10**.
-Python **3.12 or later** is required. Integration tests target NetBox 4.6.10 with
-PostgreSQL and Redis; newer NetBox versions have not yet been verified.
+Initial development version: **0.1.0.dev2**. Minimum NetBox version: **4.6.10**.
+Python **3.12 or later** is required. Integration tests pass on NetBox **4.6.10** and **4.7.0** with PostgreSQL and Redis.
+Browser flows are verified on 4.7.0. Other versions have not yet been verified.
 
 CI pipelines and PyPI publication are deferred. Install from a local checkout.
 Monitoring adapters, check execution, credentials, deployment, and observed state
@@ -33,9 +33,11 @@ are outside this initial implementation.
 - A deterministic resolver with provenance and a configuration hash. It rejects
   exports when the caller cannot read every relevant rule or active exception.
 - UI lists, detail pages, editing, change previews, bulk editing/deletion, imports,
-  global search, and Monitoring tabs on Devices and Virtual Machines.
+  global search, and Monitoring tabs on Devices and Virtual Machines with an
+  authorized Add asset Exception button prefilled for the current asset/profile.
 - Native tags, comments, custom fields, journals, and changelog integration.
-- REST CRUD, profile impact reporting, and effective configuration endpoints.
+- REST CRUD, profile impact reporting, monitored-asset discovery, and per-asset
+  effective configuration endpoints.
 - Protection against invalid scope changes, duplicate checks, deleting referenced
   rules or assigned profiles, and switching profiles with active exceptions.
 
@@ -198,11 +200,26 @@ All endpoints require authentication and use normal NetBox API tokens:
 /api/plugins/monitoring/monitoring-check-keys/
 /api/plugins/monitoring/monitoring-check-rules/
 /api/plugins/monitoring/monitoring-asset-overrides/
+/api/plugins/monitoring/assets/
+/api/plugins/monitoring/assets/dcim.device/<id>/config/
+/api/plugins/monitoring/assets/virtualization.virtualmachine/<id>/config/
 /api/plugins/monitoring/monitoring-effective/dcim.device/<id>/
 /api/plugins/monitoring/monitoring-effective/virtualization.virtualmachine/<id>/
 ```
 
-The effective endpoint returns `schema_version`, asset identity, `configured`,
+`GET /api/plugins/monitoring/assets/` discovers configured assets visible to the
+caller, with a `config_url` for each asset and limit/offset pagination. An
+existing assignment to a disabled profile remains listed because its monitoring
+configuration stays effective. An asset without a profile is omitted.
+
+One GET to an asset's `/config/` URL returns its fully merged configuration,
+including active exceptions and provenance. It returns 404 for assets without a
+profile and refuses incomplete exports when permissions are missing. The
+Monitoring tab links directly to this endpoint. Existing `monitoring-effective`
+URLs remain available and retain their `configured=false` response for
+unconfigured assets.
+
+The configuration endpoint returns `schema_version`, asset identity, `configured`,
 profile information, sorted checks, and per-check provenance. Configured assets
 also include `config_hash`: SHA-256 of the canonical check behavior, excluding
 provenance, database IDs, reasons, tickets, and expiry timestamps. The hash changes
@@ -274,6 +291,15 @@ Tests cover check semantics, inheritance and expiry, hashes, lifecycle protectio
 permission combinations, native forms and serializers, event data, REST CRUD,
 selector setup, imports, previews, changelog, and Device/VM tabs. Templates,
 migrations, management commands, and form JavaScript are included in the wheel.
+
+`tests/browser/monitoring.cjs` also checks the native profile form, key-driven
+parameter controls, and the asset exception flow with Playwright/Chromium.
+`tests.browser_fixture.prepare()` and `cleanup()` provide disposable fixtures and
+a private session; they refuse to run outside a `test_netbox_monitoring_` database.
+Set `MONITORING_BROWSER_STATE` to a private JSON path, run a development server
+against that isolated database (default browser URL: `http://127.0.0.1:8026`), then
+run the script with Playwright available to Node. The fixture setup/cleanup is
+invoked through NetBox's shell, and never creates accounts in the live database.
 
 ## License
 

@@ -1,11 +1,14 @@
 """Monitoring CRUD, change previews and asset configuration tabs."""
 
 import json
+from urllib.parse import urlencode
 
 from django.apps import apps
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.shortcuts import render
+from django.urls import reverse
 from netbox.views import generic
 from utilities.forms import restrict_form_fields
 from utilities.views import ViewTab, register_model_view
@@ -14,8 +17,9 @@ from . import models
 from . import monitoring_filtersets as filters
 from . import monitoring_forms as forms
 from . import monitoring_tables as tables
+from .assets import asset_config_url
 from .monitoring_models import ASSET_MODELS, assigned_assets
-from .monitoring_permissions import MonitoringWriteMixin
+from .monitoring_permissions import MonitoringWriteMixin, can_manage_monitoring
 from .monitoring_resolver import resolve_monitoring
 
 
@@ -97,6 +101,11 @@ class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.Objec
             if instance.pk
             else {}
         )
+        before_types = (
+            list(instance.object_types.all())
+            if isinstance(instance, models.MonitoringProfile) and instance.pk
+            else None
+        )
         form = self.form(data=request.POST, files=request.FILES, instance=instance)
         restrict_form_fields(form, request.user)
         changes = []
@@ -105,6 +114,16 @@ class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.Objec
                 current = getattr(form.instance, name)
                 if current != previous:
                     changes.append((name.replace("_", " ").title(), str(previous), str(current)))
+            if before_types is not None:
+                proposed_types = list(form.cleaned_data.get("object_types", before_types))
+                if {ct.pk for ct in before_types} != {ct.pk for ct in proposed_types}:
+                    changes.append(
+                        (
+                            "Object types",
+                            ", ".join(str(ct) for ct in before_types),
+                            ", ".join(str(ct) for ct in proposed_types),
+                        )
+                    )
         return render(
             request,
             self.template_name,
@@ -186,6 +205,24 @@ def monitoring_tab_context(view, request, instance):
     context = {}
     try:
         context["monitoring"] = resolve_monitoring(instance, request.user)
+        if context["monitoring"]["configured"]:
+            context["monitoring_config_url"] = asset_config_url(instance)
+            if can_manage_monitoring(request.user) and request.user.has_perm(
+                "netbox_monitoring.add_monitoringassetoverride"
+            ):
+                query = urlencode(
+                    {
+                        "profile": context["monitoring"]["profile"]["id"],
+                        "assigned_object_type": ContentType.objects.get_for_model(instance).pk,
+                        "assigned_object_id": instance.pk,
+                        "return_url": reverse(
+                            f"{instance._meta.app_label}:{instance._meta.model_name}_monitoring", args=[instance.pk]
+                        ),
+                    }
+                )
+                context["exception_add_url"] = (
+                    reverse("plugins:netbox_monitoring:monitoringassetoverride_add") + "?" + query
+                )
         for check in context["monitoring"]["checks"]:
             check["parameters_text"] = json.dumps(check["parameters"], sort_keys=True)
     except ValidationError as error:

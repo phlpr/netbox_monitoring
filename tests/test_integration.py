@@ -63,6 +63,21 @@ class MonitoringIntegrationTests(MonitoringTestCase):
         self.assertEqual(response.status_code, 400, response.data)
         self.assertEqual(self.profile.object_types.count(), 2)
 
+    def test_object_type_preview_shows_changes_without_saving(self):
+        profile = MonitoringProfile.objects.create(name="Unused preview profile")
+        response = self.client.post(
+            ui_url("monitoringprofile", "_edit", profile.pk),
+            {
+                "name": profile.name,
+                "status": "active",
+                "_preview": "1",
+                "object_types": [ContentType.objects.get_for_model(self.device).pk],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any(row[0] == "Object types" for row in response.context["changes"]))
+        self.assertEqual(profile.object_types.count(), 2)
+
     def test_native_serializer_discovery_custom_fields_and_event_data(self):
         self.assertIs(get_serializer_for_model(MonitoringProfile), MonitoringProfileSerializer)
         for asset, serializer_type, form_type in (
@@ -328,9 +343,12 @@ class MonitoringPermissionTests(MonitoringTestCase):
         api.force_authenticate(user)
         response = api.get(api_url("monitoringprofile", "impact", self.profile.pk))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.data["assets"],
-            [{"object_type": "virtualization.virtualmachine", "id": self.vm.pk, "name": self.vm.name}],
+        self.assertEqual(len(response.data["assets"]), 1)
+        self.assertEqual(response.data["assets"][0]["id"], self.vm.pk)
+        self.assertTrue(
+            response.data["assets"][0]["config_url"].endswith(
+                f"/assets/virtualization.virtualmachine/{self.vm.pk}/config/"
+            )
         )
 
     def test_request_context_is_reset_when_a_request_raises(self):

@@ -51,7 +51,10 @@
     }
     function selectKey(data) {
       if (key.tomselect) {
-        key.tomselect.addOption({ value: String(data.id), text: data.name || data.display });
+        key.tomselect.addOption({
+          [key.tomselect.settings.valueField || "id"]: String(data.id),
+          [key.tomselect.settings.labelField || "display"]: data.name || data.display
+        });
         key.tomselect.setValue(String(data.id), true);
       } else {
         if (![...key.options].some(option => option.value === String(data.id))) {

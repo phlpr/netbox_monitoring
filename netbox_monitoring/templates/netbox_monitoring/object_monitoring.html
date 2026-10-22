@@ -1,5 +1,13 @@
 {% extends 'generic/object.html' %}
 {% load helpers %}
+{% block extra_controls %}
+  {% if exception_add_url %}
+    <a href="{{ exception_add_url }}" class="btn btn-primary"><i class="mdi mdi-plus-thick" aria-hidden="true"></i> Add asset Exception</a>
+  {% endif %}
+  {% if monitoring_config_url %}
+    <a href="{{ monitoring_config_url }}" class="btn btn-outline-primary"><i class="mdi mdi-code-json" aria-hidden="true"></i> Configuration API</a>
+  {% endif %}
+{% endblock %}
 {% block content %}
 {% if monitoring_error %}<div class="alert alert-danger">{{ monitoring_error }}</div>
 {% elif not monitoring.configured %}<div class="alert alert-info">Monitoring not configured. Select a Monitoring Profile when editing this asset.</div>

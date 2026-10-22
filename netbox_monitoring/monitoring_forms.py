@@ -179,7 +179,9 @@ class MonitoringCheckRuleForm(CheckParameterFormMixin, MonitoringSaveFormMixin, 
 
 class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMixin, PrimaryModelForm, ParameterFields):
     profile = DynamicModelChoiceField(queryset=MonitoringProfile.objects.all())
-    rule = DynamicModelChoiceField(queryset=MonitoringCheckRule.objects.all(), required=False)
+    rule = DynamicModelChoiceField(
+        queryset=MonitoringCheckRule.objects.all(), required=False, query_params={"profile_id": "$profile"}
+    )
     assigned_object_type = forms.ModelChoiceField(
         queryset=ContentType.objects.filter(
             Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine"),

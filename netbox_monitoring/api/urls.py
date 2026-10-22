@@ -2,6 +2,8 @@ from django.urls import path
 from netbox.api.routers import NetBoxRouter
 
 from .views import (
+    MonitoringAssetConfigView,
+    MonitoringAssetListView,
     MonitoringAssetOverrideViewSet,
     MonitoringCheckKeyViewSet,
     MonitoringCheckRuleViewSet,
@@ -15,6 +17,8 @@ router.register("monitoring-check-keys", MonitoringCheckKeyViewSet)
 router.register("monitoring-check-rules", MonitoringCheckRuleViewSet)
 router.register("monitoring-asset-overrides", MonitoringAssetOverrideViewSet)
 urlpatterns = router.urls + [
+    path("assets/", MonitoringAssetListView.as_view(), name="monitored-assets"),
+    path("assets/<str:object_type>/<int:pk>/config/", MonitoringAssetConfigView.as_view(), name="asset-config"),
     path(
         "monitoring-effective/<str:object_type>/<int:pk>/",
         MonitoringEffectiveView.as_view(),

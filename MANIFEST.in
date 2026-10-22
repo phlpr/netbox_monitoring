@@ -1,2 +1,3 @@
 recursive-include tests *.py
 include scripts/test.sh
+recursive-include tests/browser *.cjs

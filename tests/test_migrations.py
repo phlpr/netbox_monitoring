@@ -7,6 +7,13 @@ from django.test import TransactionTestCase
 from netbox_monitoring.monitoring_schema import DEFAULTS
 
 
+def historical_apps(executor, target):
+    # Retain the other apps' current schema when only this plugin is rolled
+    # back; newer NetBox versions add required fields to e.g. CustomField.
+    native = [node for node in executor.loader.graph.leaf_nodes() if node[0] != "netbox_monitoring"]
+    return executor.loader.project_state(native + target).apps
+
+
 class CheckKeyMigrationTests(TransactionTestCase):
     def test_existing_rule_and_exception_keys_round_trip(self):
         executor = MigrationExecutor(connection)
@@ -15,7 +22,7 @@ class CheckKeyMigrationTests(TransactionTestCase):
         after = [("netbox_monitoring", "0005_check_key_catalog")]
         try:
             executor.migrate(before)
-            state = executor.loader.project_state(before).apps
+            state = historical_apps(executor, before)
             Profile = state.get_model("netbox_monitoring", "MonitoringProfile")
             Rule = state.get_model("netbox_monitoring", "MonitoringCheckRule")
             Override = state.get_model("netbox_monitoring", "MonitoringAssetOverride")
@@ -52,7 +59,7 @@ class CheckKeyMigrationTests(TransactionTestCase):
             )
             executor = MigrationExecutor(connection)
             executor.migrate(after)
-            state = executor.loader.project_state(after).apps
+            state = historical_apps(executor, after)
             Key = state.get_model("netbox_monitoring", "MonitoringCheckKey")
             self.assertEqual(Key.objects.filter(name="disk.all").count(), 1)
             Rule = state.get_model("netbox_monitoring", "MonitoringCheckRule")
@@ -63,9 +70,7 @@ class CheckKeyMigrationTests(TransactionTestCase):
             self.assertEqual(Override.objects.get(pk=changed.pk).parameters, {"warning": 85})
             executor = MigrationExecutor(connection)
             executor.migrate(before)
-            restored = executor.loader.project_state(before).apps.get_model(
-                "netbox_monitoring", "MonitoringAssetOverride"
-            )
+            restored = historical_apps(executor, before).get_model("netbox_monitoring", "MonitoringAssetOverride")
             self.assertEqual(restored.objects.get(pk=added.pk).key, "process.sshd")
             self.assertEqual(restored.objects.get(pk=added.pk).check_type, "process")
             self.assertEqual(restored.objects.get(pk=changed.pk).check_type, "")
@@ -81,7 +86,7 @@ class ProfileMigrationTests(TransactionTestCase):
         after = [("netbox_monitoring", "0004_remove_legacy_profile_fields")]
         try:
             executor.migrate(before)
-            state = executor.loader.project_state(before).apps
+            state = historical_apps(executor, before)
             Profile = state.get_model("netbox_monitoring", "MonitoringProfile")
             old = Profile.objects.create(name="Legacy disabled VM", selectable=False, asset_type="virtualmachine")
             both = Profile.objects.create(name="Legacy active both", selectable=True, asset_type="any")
@@ -95,7 +100,7 @@ class ProfileMigrationTests(TransactionTestCase):
             )
             executor = MigrationExecutor(connection)
             executor.migrate(after)
-            state = executor.loader.project_state(after).apps
+            state = historical_apps(executor, after)
             Profile = state.get_model("netbox_monitoring", "MonitoringProfile")
             migrated = Profile.objects.get(pk=old.pk)
             self.assertEqual(migrated.status, "disabled")
@@ -108,7 +113,7 @@ class ProfileMigrationTests(TransactionTestCase):
             )
             executor = MigrationExecutor(connection)
             executor.migrate(before)
-            reverted = executor.loader.project_state(before).apps.get_model("netbox_monitoring", "MonitoringProfile")
+            reverted = historical_apps(executor, before).get_model("netbox_monitoring", "MonitoringProfile")
             self.assertFalse(reverted.objects.get(pk=old.pk).selectable)
             self.assertEqual(reverted.objects.get(pk=old.pk).asset_type, "virtualmachine")
         finally:
