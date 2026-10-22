@@ -10,7 +10,8 @@ from .models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProf
 
 class MonitoringProfileTable(PrimaryModelTable):
     name = tables.Column(linkify=True)
-    selectable = columns.BooleanColumn()
+    status = columns.ChoiceFieldColumn()
+    object_types = columns.ContentTypesColumn()
     platform = tables.Column(linkify=True)
 
     class Meta(PrimaryModelTable.Meta):
@@ -20,8 +21,8 @@ class MonitoringProfileTable(PrimaryModelTable):
             "id",
             "name",
             "description",
-            "selectable",
-            "asset_type",
+            "status",
+            "object_types",
             "platform",
             "owner",
             "comments",
@@ -29,7 +30,7 @@ class MonitoringProfileTable(PrimaryModelTable):
             "last_updated",
             "actions",
         )
-        default_columns = ("name", "description", "selectable", "asset_type", "platform")
+        default_columns = ("name", "status", "object_types", "platform", "description")
 
 
 class MonitoringCheckRuleTable(PrimaryModelTable):

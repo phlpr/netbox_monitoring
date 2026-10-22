@@ -10,6 +10,7 @@ from django.utils import timezone
 from netbox.models import PrimaryModel
 from utilities.querysets import RestrictedQuerySet
 
+from .choices import MonitoringProfileStatusChoices
 from .monitoring_schema import ASSET_MODELS, CHECK_TYPES, OPERATIONS, PROFILE_FIELD, changed_parameters, validate_check
 
 
@@ -70,20 +71,15 @@ class MonitoringModel(PrimaryModel):
 
 class MonitoringProfile(MonitoringModel):
     name = models.CharField(max_length=200, unique=True)
-    selectable = models.BooleanField(
-        default=True, help_text="Allow new selections; existing assignments stay effective."
+    status = models.CharField(
+        max_length=50,
+        choices=MonitoringProfileStatusChoices,
+        default="active",
+        help_text="Disabled profiles remain effective for existing assignments.",
     )
-    asset_type = models.CharField(
-        max_length=30,
-        default="any",
-        choices=(
-            ("any", "Device and VM"),
-            ("device", "Device"),
-            ("virtualmachine", "Virtual machine"),
-        ),
-    )
+    object_types = models.ManyToManyField("contenttypes.ContentType", related_name="monitoring_profiles")
     platform = models.ForeignKey("dcim.Platform", on_delete=models.PROTECT, null=True, blank=True, related_name="+")
-    clone_fields = ("description", "selectable", "asset_type", "platform", "owner", "comments")
+    clone_fields = ("description", "status", "object_types", "platform", "owner", "comments")
 
     class Meta:
         ordering = ("name",)
@@ -93,18 +89,45 @@ class MonitoringProfile(MonitoringModel):
     def __str__(self):
         return self.name
 
+    def get_status_color(self):
+        return MonitoringProfileStatusChoices.colors.get(self.status, "gray")
+
+    def selected_object_types(self):
+        values = getattr(self, "_m2m_values", {}).get("object_types")
+        if values is not None:
+            from django.contrib.contenttypes.models import ContentType
+
+            return list(ContentType.objects.filter(pk__in=[getattr(value, "pk", value) for value in values]))
+        if self.pk:
+            return list(self.object_types.all())
+        from django.contrib.contenttypes.models import ContentType
+
+        return [ContentType.objects.get_for_model(model) for model in asset_models()]
+
     def accepts(self, asset):
         return (
             asset._meta.label_lower in ASSET_MODELS
-            and (self.asset_type == "any" or self.asset_type == asset._meta.model_name)
+            and any(f"{ct.app_label}.{ct.model}" == asset._meta.label_lower for ct in self.selected_object_types())
             and (self.platform_id is None or self.platform_id == asset.platform_id)
         )
 
     def clean(self):
         super().clean()
+        types = self.selected_object_types()
+        if not types or any(f"{ct.app_label}.{ct.model}" not in ASSET_MODELS for ct in types):
+            raise ValidationError({"object_types": "Select at least one supported asset object type."})
         if self.pk:
             if any(not self.accepts(asset) for asset in assigned_assets(self)):
                 raise ValidationError("The new scope excludes assets already assigned to this profile.")
+
+    def save(self, *args, **kwargs):
+        adding = self._state.adding
+        with transaction.atomic():
+            types = self.selected_object_types()
+            result = super().save(*args, **kwargs)
+            if adding:
+                self.object_types.set(types)
+            return result
 
 
 class MonitoringRuleQuerySet(RestrictedQuerySet):

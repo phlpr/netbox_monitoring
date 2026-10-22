@@ -6,7 +6,7 @@
 {% else %}
 <div class="card mb-3"><h5 class="card-header">Effective monitoring configuration</h5>
 <div class="card-body"><strong>{{ monitoring.profile.name }}</strong>
-{% if not monitoring.profile.selectable %}<span class="badge text-bg-secondary">Existing assignments only</span>{% endif %}
+{% if monitoring.profile.status != 'active' %}<span class="badge text-bg-secondary">Existing assignments only</span>{% endif %}
 <p class="text-muted mb-0">Desired configuration in NetBox. Deployment status is supplied by the external monitoring adapter.</p>
 </div>
 <div class="table-responsive"><table class="table table-hover">

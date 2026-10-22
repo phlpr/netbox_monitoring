@@ -22,7 +22,7 @@ are outside this initial implementation.
 
 - One optional monitoring profile per asset, selected through a native Object
   custom field when creating or editing a Device or Virtual Machine.
-- Profiles restricted by asset type and optional platform. Retired profiles can
+- Profiles restricted by native Object type(s) and optional platform. Retired profiles can
   remain effective for existing assignments while being hidden from new choices.
 - Disk, CPU, memory, DNS, and process/service checks with validated JSON parameters
   and human-readable forms.
@@ -86,7 +86,8 @@ The plugin UI is under `/plugins/monitoring/`.
 The setup command creates `monitoring_profile` as a single Object field pointing
 to `netbox_monitoring.monitoringprofile`, available on `dcim.device` and
 `virtualization.virtualmachine`. It has no default and assigns no profiles to
-existing assets. Only selectable profiles appear in the selector. Compatible
+existing assets. Only profiles with status `active` appear in the selector. Profiles with status
+`disabled` remain effective for existing assignments. Compatible
 existing fields are left unchanged; incompatible fields cause an error.
 
 ## Permissions
@@ -110,6 +111,13 @@ A missing permission results in an error instead of a partial configuration.
 
 The configured group and permission grants are managed by the administrator; the
 setup command creates neither automatically.
+
+Profile status uses the native NetBox choice format with `active` (green) and
+`disabled` (gray). It can be configured through
+`FIELD_CHOICES["netbox_monitoring.MonitoringProfile.status"]`. Object type selection
+uses the native multi-select, currently supporting Devices and Virtual Machines.
+Existing `selectable` and `asset_type` values are migrated automatically without
+changing asset assignments. Ownership is rendered in the native Ownership section.
 
 ## Configuration example
 

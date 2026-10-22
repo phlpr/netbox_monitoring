@@ -8,8 +8,15 @@ from django.db.models import Q
 from django.urls import reverse
 from netbox.forms import NetBoxModelFilterSetForm, PrimaryModelBulkEditForm, PrimaryModelForm, PrimaryModelImportForm
 from utilities.exceptions import AbortRequest
-from utilities.forms.fields import DynamicModelChoiceField
+from utilities.forms.fields import ContentTypeMultipleChoiceField, CSVMultipleContentTypeField, DynamicModelChoiceField
 
+try:
+    from utilities.forms.fields import ChoiceField
+except ImportError:  # NetBox 4.6 uses Django's choice field.
+    ChoiceField = forms.ChoiceField
+from utilities.forms.rendering import FieldSet
+
+from .choices import MonitoringProfileStatusChoices
 from .models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProfile
 from .monitoring_schema import CHECK_TYPES, DEFAULTS, METRICS, RECORD_TYPES, changed_parameters
 
@@ -24,10 +31,25 @@ class MonitoringSaveFormMixin:
 
 class MonitoringProfileForm(MonitoringSaveFormMixin, PrimaryModelForm):
     platform = DynamicModelChoiceField(queryset=Platform.objects.all(), required=False)
+    status = ChoiceField(choices=MonitoringProfileStatusChoices, initial="active")
+    object_types = ContentTypeMultipleChoiceField(
+        label="Object type(s)",
+        queryset=ContentType.objects.filter(
+            Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine")
+        ),
+    )
+    fieldsets = (
+        FieldSet("name", "status", "object_types", "platform", "description", "tags", name="Monitoring Profile"),
+    )
 
     class Meta:
         model = MonitoringProfile
-        fields = ("name", "description", "selectable", "asset_type", "platform", "owner", "comments", "tags")
+        fields = ("name", "description", "status", "object_types", "platform", "owner", "comments", "tags")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.instance.pk and "object_types" not in self.initial:
+            self.initial["object_types"] = list(self.fields["object_types"].queryset.values_list("pk", flat=True))
 
 
 class CheckParameterFormMixin:
@@ -193,9 +215,15 @@ class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMix
 
 
 class MonitoringProfileImportForm(MonitoringSaveFormMixin, PrimaryModelImportForm):
+    object_types = CSVMultipleContentTypeField(
+        queryset=ContentType.objects.filter(
+            Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine")
+        )
+    )
+
     class Meta:
         model = MonitoringProfile
-        fields = ("name", "description", "selectable", "asset_type", "platform", "comments")
+        fields = ("name", "description", "status", "object_types", "platform", "comments")
 
 
 class MonitoringCheckRuleImportForm(MonitoringSaveFormMixin, PrimaryModelImportForm):
@@ -234,7 +262,7 @@ class MonitoringAssetOverrideImportForm(MonitoringSaveFormMixin, PrimaryModelImp
 
 class MonitoringProfileFilterForm(NetBoxModelFilterSetForm):
     model = MonitoringProfile
-    selectable = forms.NullBooleanField(required=False)
+    status = forms.MultipleChoiceField(choices=MonitoringProfileStatusChoices, required=False)
 
 
 class MonitoringCheckRuleFilterForm(NetBoxModelFilterSetForm):
@@ -256,7 +284,7 @@ class MonitoringBulkEditForm(PrimaryModelBulkEditForm):
 
 class MonitoringProfileBulkEditForm(MonitoringBulkEditForm):
     model = MonitoringProfile
-    selectable = forms.NullBooleanField(required=False)
+    status = ChoiceField(choices=(("", "---------"),) + tuple(MonitoringProfileStatusChoices), required=False)
 
 
 class MonitoringCheckRuleBulkEditForm(MonitoringBulkEditForm):

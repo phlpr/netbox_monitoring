@@ -2,7 +2,9 @@ from copy import deepcopy
 from datetime import timedelta
 
 from dcim.models import Platform
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from virtualization.models import VirtualMachine
@@ -63,7 +65,7 @@ class MonitoringDomainTests(MonitoringTestCase):
     def test_unconfigured_asset_and_disabled_profile(self):
         vm = VirtualMachine.objects.create(name="unconfigured")
         self.assertFalse(self.resolve(vm)["configured"])
-        self.profile.selectable = False
+        self.profile.status = "disabled"
         self.profile.save()
         self.vm.full_clean()
         self.assertTrue(self.resolve()["configured"])
@@ -96,10 +98,8 @@ class MonitoringDomainTests(MonitoringTestCase):
             self.profile.delete()
 
     def test_profile_scope_changes_cannot_invalidate_existing_assignments(self):
-        self.profile.asset_type = "device"
-        with self.assertRaises(ValidationError):
-            self.profile.save()
-        self.profile.asset_type = "any"
+        with self.assertRaises(ValidationError), transaction.atomic():
+            self.profile.object_types.set([ContentType.objects.get_for_model(self.device)])
         self.profile.platform = Platform.objects.create(name="other-platform", slug="other-platform")
         with self.assertRaises(ValidationError):
             self.profile.save()

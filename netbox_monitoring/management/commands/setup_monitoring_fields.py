@@ -31,7 +31,7 @@ class Command(BaseCommand):
             if (
                 existing.type != "object"
                 or existing.related_object_type_id != target.pk
-                or existing.related_object_filter != {"selectable": True}
+                or existing.related_object_filter != {"status": "active"}
                 or not all(existing.object_types.filter(pk=ct.pk).exists() for ct in assets)
             ):
                 raise CommandError("An incompatible monitoring_profile field exists; review it manually.")
@@ -40,7 +40,7 @@ class Command(BaseCommand):
         if not options["apply"]:
             self.stdout.write(
                 "Would create monitoring_profile: object → MonitoringProfile, Device + VM, "
-                "selectable profiles only, no default. Run with --apply to create it."
+                "active profiles only, no default. Run with --apply to create it."
             )
             return
         field = CustomField(
@@ -48,7 +48,7 @@ class Command(BaseCommand):
             label="Monitoring Profile",
             type="object",
             related_object_type=target,
-            related_object_filter={"selectable": True},
+            related_object_filter={"status": "active"},
             group_name="Monitoring",
             description="Centrally maintained monitoring configuration. Asset exceptions are maintained by the monitoring team.",
         )

@@ -11,6 +11,7 @@
         <tr><th scope="row">{{ label }}</th><td>
           {% if label == 'Enabled' or label == 'Selectable' %}
             {% if value %}Yes{% else %}No{% endif %}
+          {% elif label == 'Status' %}{% badge object.get_status_display bg_color=object.get_status_color %}
           {% elif value.get_absolute_url %}{{ value|linkify }}
           {% elif label == 'Parameters' %}<pre class="mb-0">{{ value }}</pre>
           {% else %}{{ value|default_if_none:"—" }}{% endif %}

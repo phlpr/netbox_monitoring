@@ -24,7 +24,7 @@ class MonitoringObjectView(LoginRequiredMixin, generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         names = (
-            ("name", "description", "selectable", "asset_type", "platform")
+            ("name", "description", "status", "object_types", "platform")
             if isinstance(instance, models.MonitoringProfile)
             else (
                 ("profile", "key", "check_type", "target", "parameters", "enabled")
@@ -48,6 +48,8 @@ class MonitoringObjectView(LoginRequiredMixin, generic.ObjectView):
         rows = []
         for name in names:
             value = getattr(instance, name)
+            if name == "object_types":
+                value = ", ".join(str(ct) for ct in value.all())
             if (
                 name == "platform"
                 and value

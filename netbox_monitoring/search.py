@@ -9,7 +9,7 @@ from .models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProf
 class MonitoringProfileIndex(SearchIndex):
     model = MonitoringProfile
     fields = (("name", 100), ("description", 500), ("comments", 5000))
-    display_attrs = ("selectable", "asset_type", "description")
+    display_attrs = ("status", "description")
 
 
 @register_search

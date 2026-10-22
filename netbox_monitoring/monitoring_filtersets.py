@@ -11,7 +11,7 @@ from .models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProf
 class MonitoringProfileFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = MonitoringProfile
-        fields = ("id", "name", "selectable", "asset_type", "platform")
+        fields = ("id", "name", "status", "object_types", "platform")
 
     def search(self, queryset, name, value):
         return queryset.filter(Q(name__icontains=value.strip()) | Q(description__icontains=value.strip()))

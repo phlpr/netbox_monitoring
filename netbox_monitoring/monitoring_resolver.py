@@ -88,7 +88,7 @@ def resolve_monitoring(asset, user, now=None):
                 "expires_at": override.expires_at.isoformat() if override.expires_at else None,
             }
         )
-    result["profile"] = {"id": profile.pk, "name": profile.name, "selectable": profile.selectable}
+    result["profile"] = {"id": profile.pk, "name": profile.name, "status": profile.status}
     result["checks"] = [checks[key] for key in sorted(checks)]
     # Hash the desired behavior, excluding explanations, database IDs and expiry
     # timestamps. Expiry affects the hash when the resulting behavior changes.

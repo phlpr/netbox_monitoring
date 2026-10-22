@@ -19,8 +19,11 @@ else:
     DATABASES = deepcopy(DATABASES)  # noqa: F405
     REDIS = deepcopy(REDIS)  # noqa: F405
 
-DATABASES["default"]["NAME"] = "test_netbox_monitoring"
-DATABASES["default"]["TEST"] = {"NAME": "test_netbox_monitoring"}
+_test_database = os.environ.get("MONITORING_TEST_DATABASE", "test_netbox_monitoring")
+if _test_database != "test_netbox_monitoring" and not _test_database.startswith("test_netbox_monitoring_"):
+    raise ValueError("Monitoring test databases must start with test_netbox_monitoring_.")
+DATABASES["default"]["NAME"] = _test_database
+DATABASES["default"]["TEST"] = {"NAME": _test_database}
 for _kind, _database in (("tasks", 12), ("caching", 13)):
     REDIS[_kind]["DATABASE"] = _database
     REDIS[_kind].pop("URL", None)

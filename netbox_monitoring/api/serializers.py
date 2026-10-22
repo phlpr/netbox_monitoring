@@ -5,10 +5,11 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Q
-from netbox.api.fields import ContentTypeField
+from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import PrimaryModelSerializer
 from rest_framework import serializers
 
+from ..choices import MonitoringProfileStatusChoices
 from ..models import MonitoringAssetOverride, MonitoringCheckRule, MonitoringProfile
 from ..monitoring_schema import ASSET_MODELS
 
@@ -45,6 +46,14 @@ class MonitoringSerializerMixin:
 
 class MonitoringProfileSerializer(MonitoringSerializerMixin, PrimaryModelSerializer):
     platform = PlatformSerializer(nested=True, required=False, allow_null=True)
+    status = ChoiceField(choices=MonitoringProfileStatusChoices, required=False)
+    object_types = ContentTypeField(
+        queryset=ContentType.objects.filter(
+            Q(app_label="dcim", model="device") | Q(app_label="virtualization", model="virtualmachine")
+        ),
+        many=True,
+        required=False,
+    )
 
     class Meta:
         model = MonitoringProfile
@@ -54,8 +63,8 @@ class MonitoringProfileSerializer(MonitoringSerializerMixin, PrimaryModelSeriali
             "display",
             "name",
             "description",
-            "selectable",
-            "asset_type",
+            "status",
+            "object_types",
             "platform",
             "owner",
             "comments",

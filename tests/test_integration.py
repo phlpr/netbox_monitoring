@@ -44,6 +44,25 @@ class MonitoringIntegrationTests(MonitoringTestCase):
         self.api.force_authenticate(self.admin)
         self.client.force_login(self.admin)
 
+    def test_profile_uses_native_status_object_types_and_ownership_section(self):
+        response = self.client.get(ui_url("monitoringprofile", "_add"))
+        self.assertContains(response, "Ownership")
+        self.assertContains(response, "Object type(s)")
+        html = response.content.decode()
+        self.assertLess(html.index('id="id_owner_group"'), html.index('id="id_owner"'))
+        self.assertNotIn('name="selectable"', html)
+        self.assertNotIn('name="asset_type"', html)
+        response = self.api.get(api_url("monitoringprofile", "detail", self.profile.pk))
+        self.assertEqual(response.data["status"], {"value": "active", "label": "Active"})
+        self.assertEqual(set(response.data["object_types"]), {"dcim.device", "virtualization.virtualmachine"})
+
+    def test_profile_scope_api_change_cannot_orphan_assigned_assets(self):
+        response = self.api.patch(
+            api_url("monitoringprofile", "detail", self.profile.pk), {"object_types": ["dcim.device"]}, format="json"
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(self.profile.object_types.count(), 2)
+
     def test_native_serializer_discovery_custom_fields_and_event_data(self):
         self.assertIs(get_serializer_for_model(MonitoringProfile), MonitoringProfileSerializer)
         for asset, serializer_type, form_type in (
@@ -65,10 +84,10 @@ class MonitoringIntegrationTests(MonitoringTestCase):
         self.assertEqual(response.status_code, 201, response.data)
         profile_id = response.data["id"]
         response = self.api.patch(
-            api_url("monitoringprofile", "detail", profile_id), {"selectable": False}, format="json"
+            api_url("monitoringprofile", "detail", profile_id), {"status": "disabled"}, format="json"
         )
         self.assertEqual(response.status_code, 200, response.data)
-        response = self.api.get(api_url("monitoringprofile"), {"selectable": True})
+        response = self.api.get(api_url("monitoringprofile"), {"status": "active"})
         self.assertEqual([item["id"] for item in response.data["results"]], [self.profile.pk])
         response = self.api.get(api_url("monitoringprofile", "impact", self.profile.pk))
         self.assertEqual(response.status_code, 200)
@@ -101,7 +120,8 @@ class MonitoringIntegrationTests(MonitoringTestCase):
         self.assertEqual(self.api.delete(api_url("monitoringprofile", "detail", profile_id)).status_code, 204)
 
     def test_native_asset_api_rejects_incompatible_assignment(self):
-        incompatible = MonitoringProfile.objects.create(name="Device only", asset_type="device")
+        incompatible = MonitoringProfile.objects.create(name="Device only")
+        incompatible.object_types.set([ContentType.objects.get_for_model(self.device)])
         url = reverse("virtualization-api:virtualmachine-detail", args=[self.vm.pk])
         response = self.api.patch(url, {"custom_fields": {PROFILE_FIELD: incompatible.pk}}, format="json")
         self.assertEqual(response.status_code, 400, response.data)
@@ -136,7 +156,12 @@ class MonitoringIntegrationTests(MonitoringTestCase):
 
     def test_preview_does_not_save_and_normal_edit_creates_native_changelog(self):
         url = ui_url("monitoringprofile", "_edit", self.profile.pk)
-        data = {"name": "Changed name", "asset_type": "any", "selectable": True, "_preview": "1"}
+        data = {
+            "name": "Changed name",
+            "status": "active",
+            "object_types": list(self.profile.object_types.values_list("pk", flat=True)),
+            "_preview": "1",
+        }
         response = self.client.post(url, data)
         self.assertContains(response, "Change preview")
         self.profile.refresh_from_db()

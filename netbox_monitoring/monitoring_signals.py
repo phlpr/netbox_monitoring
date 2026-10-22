@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import connections
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError
-from django.db.models.signals import pre_delete, pre_save
+from django.db.models.signals import m2m_changed, pre_delete, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 from netbox.signals import post_clean
@@ -35,7 +35,7 @@ def validate_monitoring_profile(sender, instance, **kwargs):
             raise ValidationError(f"{PROFILE_FIELD}: view permission is required for the selected profile.")
         if not profile.accepts(instance):
             raise ValidationError(f"{PROFILE_FIELD}: the profile does not support this asset type/platform.")
-        if value != previous and not profile.selectable:
+        if value != previous and profile.status != "active":
             raise ValidationError(f"{PROFILE_FIELD}: this profile is no longer available for new selections.")
     if instance.pk and value != previous:
         ct = ContentType.objects.get_for_model(instance)
@@ -69,6 +69,32 @@ def remove_asset_overrides(sender, instance, **kwargs):
     ):
         override.snapshot()
         override.delete()
+
+
+@receiver(m2m_changed, sender=MonitoringProfile.object_types.through)
+def validate_profile_object_types(sender, instance, action, reverse, pk_set, **kwargs):
+    if action not in ("pre_add", "pre_remove", "pre_clear"):
+        return
+    profiles = (
+        MonitoringProfile.objects.filter(pk__in=pk_set)
+        if reverse and pk_set is not None
+        else (instance.monitoring_profiles.all() if reverse else [instance])
+    )
+    for profile in profiles:
+        selected = set(profile.object_types.values_list("pk", flat=True))
+        changed = {instance.pk} if reverse else set(pk_set or [])
+        if action == "pre_add":
+            selected |= changed
+        elif action == "pre_remove":
+            selected -= changed
+        else:
+            selected = selected - {instance.pk} if reverse else set()
+        types = list(ContentType.objects.filter(pk__in=selected))
+        if any(f"{ct.app_label}.{ct.model}" not in ASSET_MODELS for ct in types):
+            raise ValidationError("Only supported monitoring asset object types may be selected.")
+        labels = {f"{ct.app_label}.{ct.model}" for ct in types}
+        if any(asset._meta.label_lower not in labels for asset in assigned_assets(profile)):
+            raise ValidationError("The new object types exclude assets already assigned to this profile.")
 
 
 def validate_asset_save(sender, instance, using="default", **kwargs):
