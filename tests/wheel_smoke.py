@@ -17,8 +17,14 @@ from rest_framework.test import APIClient
 from virtualization.models import VirtualMachine
 
 import netbox_monitoring
-from netbox_monitoring.assets import asset_config_url, asset_object_types
-from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from netbox_monitoring.assets import asset_config_url
+from netbox_monitoring.models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
 from netbox_monitoring.monitoring_schema import DEFAULTS, PROFILE_FIELD
 
 
@@ -31,10 +37,7 @@ def verify_install():
     assert not direct.get("dir_info", {}).get("editable"), "An editable installation is not a wheel test."
     assert info.version == netbox_monitoring.__version__
     assert settings.DATABASES["default"]["NAME"].startswith("test_netbox_monitoring"), "Use an isolated test database."
-    field = CustomField.objects.get(name=PROFILE_FIELD)
-    assert set(field.object_types.values_list("pk", flat=True)) >= set(
-        asset_object_types().values_list("pk", flat=True)
-    )
+    assert not CustomField.objects.filter(name=PROFILE_FIELD).exists()
     with transaction.atomic():
         try:
             marker = uuid4().hex[:10]
@@ -42,16 +45,18 @@ def verify_install():
             profile = MonitoringProfile.objects.create(name=f"Wheel smoke {marker}")
             profile.object_types.add(ContentType.objects.get_for_model(Site))
             key = MonitoringCheckKey.objects.create(name=f"smoke.{marker}.disk", check_type="disk")
-            rule = MonitoringCheckRule.objects.create(
+            MonitoringCheckRule.objects.create(
                 profile=profile, key=key, target="*", parameters=deepcopy(DEFAULTS["disk"])
             )
-            vm = VirtualMachine.objects.create(name=f"wheel-{marker}", custom_field_data={PROFILE_FIELD: profile.pk})
-            site = Site.objects.create(
-                name=f"Wheel {marker}", slug=f"wheel-{marker}", custom_field_data={PROFILE_FIELD: profile.pk}
-            )
+            vm = VirtualMachine.objects.create(name=f"wheel-{marker}")
+            site = Site.objects.create(name=f"Wheel {marker}", slug=f"wheel-{marker}")
+            for asset in (vm, site):
+                MonitoringProfileAssignment.objects.create(
+                    profile=profile,
+                    assigned_object_type=ContentType.objects.get_for_model(asset),
+                    assigned_object_id=asset.pk,
+                )
             MonitoringAssetOverride.objects.create(
-                profile=profile,
-                rule=rule,
                 key=key,
                 assigned_object_type=ContentType.objects.get_for_model(vm),
                 assigned_object_id=vm.pk,
@@ -72,7 +77,7 @@ def verify_install():
                 assert response.status_code == 200
                 assert b"Add asset Exception" in response.content
             print(
-                f"Installed wheel {info.version} passed: selectors, VM/Site config, exception resolution, and UI tabs."
+                f"Installed wheel {info.version} passed: assignments, VM/Site config, exception resolution, and UI tabs."
             )
         finally:
             transaction.set_rollback(True)
