@@ -1,0 +1,19 @@
+{% extends 'generic/object_edit.html' %}
+{% load static %}
+{% block pre_form_fields %}
+{% if affected_assets %}
+<div class="alert alert-info">Changes to this profile affect {{ affected_assets|length }} assets visible to you. Active exceptions keep their explicitly overridden values.</div>
+{% endif %}
+{% if preview %}
+<div class="card mb-3"><h5 class="card-header">Change preview — nothing has been saved</h5>
+<table class="table"><thead><tr><th>Setting</th><th>Current</th><th>Proposed</th></tr></thead><tbody>
+{% for label, previous, proposed in changes %}<tr><th>{{ label }}</th><td>{{ previous }}</td><td>{{ proposed }}</td></tr>
+{% empty %}<tr><td colspan="3">No changes, or validation errors must be corrected.</td></tr>{% endfor %}
+</tbody></table></div>
+{% endif %}
+{% endblock %}
+{% block form %}{% include 'netbox_monitoring/monitoring_form.html' %}{% endblock %}
+{% block buttons %}
+<button type="submit" name="_preview" class="btn btn-outline-primary">Preview changes</button>
+{{ block.super }}
+{% endblock %}

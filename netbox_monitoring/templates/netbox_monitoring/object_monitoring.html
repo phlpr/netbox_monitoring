@@ -1,0 +1,31 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% block extra_controls %}
+  {% if exception_add_url %}
+    <a href="{{ exception_add_url }}" class="btn btn-primary"><i class="mdi mdi-plus-thick" aria-hidden="true"></i> Add asset Exception</a>
+  {% endif %}
+  {% if monitoring_config_url %}
+    <a href="{{ monitoring_config_url }}" class="btn btn-outline-primary"><i class="mdi mdi-code-json" aria-hidden="true"></i> Configuration API</a>
+  {% endif %}
+{% endblock %}
+{% block content %}
+{% if monitoring_error %}<div class="alert alert-danger">{{ monitoring_error }}</div>
+{% elif not monitoring.configured %}<div class="alert alert-info">Monitoring not configured. Select a Monitoring Profile when editing this asset.</div>
+{% else %}
+<div class="card mb-3"><h5 class="card-header">Effective monitoring configuration</h5>
+<div class="card-body"><strong>{{ monitoring.profile.name }}</strong>
+{% if monitoring.profile.status != 'active' %}<span class="badge text-bg-secondary">Existing assignments only</span>{% endif %}
+<p class="text-muted mb-0">Desired configuration in NetBox. Deployment status is supplied by the external monitoring adapter.</p>
+</div>
+<div class="table-responsive"><table class="table table-hover">
+<thead><tr><th>Check</th><th>Type</th><th>Target</th><th>Parameters</th><th>Enabled</th><th>Source</th></tr></thead>
+<tbody>{% for check in monitoring.checks %}<tr>
+<td>{{ check.key }}</td><td>{{ check.check_type }}</td><td>{{ check.target|default:"Asset" }}</td>
+<td><code>{{ check.parameters_text }}</code></td><td>{{ check.enabled|yesno:"Yes,No" }}</td>
+<td>{% if check.source.override_id %}Asset exception: {{ check.source.reason }}
+{% if check.source.expires_at %}<br>Expires: {{ check.source.expires_at }}{% endif %}
+{% else %}Profile{% endif %}</td></tr>
+{% empty %}<tr><td colspan="6">This profile contains no checks.</td></tr>{% endfor %}</tbody></table></div>
+</div>
+{% endif %}
+{% endblock %}
