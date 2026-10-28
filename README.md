@@ -3,10 +3,10 @@
 Manage desired monitoring configuration in NetBox using reusable profiles, typed
 checks, and justified exceptions for individual NetBox objects.
 
-This standalone plugin extracts the monitoring functionality from
-`netbox_aesai` (`0.7.0.dev2`). It retains its check semantics, central maintenance permissions, and native NetBox
-integration, with native profile fields and a shared check key catalog. It has no runtime
-dependency on AESAI, Nagios, or op5.
+Configure monitoring independently of a specific backend, using central
+maintenance permissions, native NetBox profile fields, and a shared check key
+catalog. External adapters consume the configuration and apply it to a
+monitoring backend.
 
 ## Status and compatibility
 
@@ -240,8 +240,7 @@ profile information, sorted checks, and per-check provenance. Configured assets
 also include `config_hash`: SHA-256 of the canonical check behavior, excluding
 provenance, database IDs, reasons, tickets, and expiry timestamps. The hash changes
 when expiry changes the resulting checks. An unconfigured asset returns
-`configured=false`, `profile=null`, and an empty check list, matching the AESAI
-resolver contract.
+`configured=false`, `profile=null`, and an empty check list.
 
 Profile impact reports include only assets visible to the caller. The exception
 API supports `active=true` / `active=false` filtering in addition to the stored
@@ -253,27 +252,6 @@ Repeated names with the same type share an entry. A repeated name with conflicti
 types stops the migration and must be resolved first. Rule/exception IDs,
 parameters, and effective string key names are retained. Schema and key data
 migrations support reversal.
-
-## Moving an existing AESAI installation
-
-This initial extraction creates independent tables and content types. It does
-**not** automatically transfer existing AESAI data or remove the monitoring code
-from the original plugin. The source snapshot is left unchanged.
-
-A production cutover needs an explicit data migration: copy profiles, rules,
-exceptions, tags, and monitoring custom fields; map profile and rule IDs; update
-asset selector values and the selector's related content type; and recreate
-permissions for the new app label. Historical changelog records retain their
-original content types. Verify resolved configurations before and after cutover.
-
-The two monitoring implementations must not be active together: both validate the
-same `monitoring_profile` field and register the same asset tab. Disable/remove
-the legacy monitoring integration as part of cutover. The new setup command
-refuses a selector still referencing `netbox_aesai.monitoringprofile`; it never
-silently reinterprets legacy IDs as new profile IDs.
-
-Automated legacy data migration and changes to the original AESAI plugin are
-separate follow-up work.
 
 ## Development and checks
 
