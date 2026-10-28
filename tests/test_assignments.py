@@ -1,5 +1,6 @@
 from copy import deepcopy
 
+from dcim.models import Platform
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
@@ -170,6 +171,37 @@ class WeightedAssignmentTests(MonitoringTestCase):
         )
         self.assertEqual(api.get(base_url).data["checks"][0]["parameters"]["warning"], 80)
         self.assertEqual(api.get(asset_config_url(self.vm)).data["checks"][0]["parameters"]["warning"], 85)
+
+    def test_save_reloads_profile_status_cached_before_another_write(self):
+        profile = MonitoringProfile.objects.create(name="Initially active")
+        pending = MonitoringProfileAssignment(profile=profile, assigned_object=self.vm)
+        current = MonitoringProfile.objects.get(pk=profile.pk)
+        current.status = "disabled"
+        current.save()
+        with self.assertRaisesMessage(ValidationError, "Disabled profiles"):
+            pending.save()
+
+    def test_save_reloads_key_type_cached_before_another_write(self):
+        key = MonitoringCheckKey.objects.create(name="not.yet.used", check_type="disk")
+        pending = MonitoringCheckRule(profile=self.profile, key=key, target="/tmp", parameters=DEFAULTS["disk"])
+        current = MonitoringCheckKey.objects.get(pk=key.pk)
+        current.check_type = "cpu"
+        current.save()
+        with self.assertRaises(ValidationError):
+            pending.save()
+        self.assertFalse(MonitoringCheckRule.objects.filter(key=key).exists())
+
+    def test_save_reloads_asset_platform_cached_before_another_write(self):
+        platform = Platform.objects.create(name="Scoped OS", slug="scoped-os")
+        profile = MonitoringProfile.objects.create(name="Scoped profile", platform=platform)
+        self.vm.platform = platform
+        self.vm.save()
+        pending = MonitoringProfileAssignment(profile=profile, assigned_object=self.vm)
+        current = VirtualMachine.objects.get(pk=self.vm.pk)
+        current.platform = None
+        current.save()
+        with self.assertRaisesMessage(ValidationError, "type/platform"):
+            pending.save()
 
 
 class AssignmentPermissionTests(MonitoringTestCase):

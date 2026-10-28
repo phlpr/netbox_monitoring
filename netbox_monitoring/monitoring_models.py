@@ -97,6 +97,10 @@ class MonitoringModel(PrimaryModel):
         from .monitoring_transactions import configuration_write
 
         with configuration_write(kwargs.get("using") or self._state.db):
+            # Forms/serializers may have cached relations before acquiring the
+            # lock. Validate current catalogue and asset state under the lock.
+            for name in ("profile", "key", "assigned_object_type", "assigned_object"):
+                self._state.fields_cache.pop(name, None)
             self.full_clean()
             return super().save(*args, **kwargs)
 
