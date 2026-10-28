@@ -52,7 +52,7 @@ in COMPATIBILITY.md. Publishing downloads the same tested `dist` artifact.
 
 The integration jobs use dedicated PostgreSQL/Redis services and install the
 wheel without editable mode. Their copied tests and scripts run outside the source
-checkout. Migration drift, selector setup, static collection, and the smoke test
+checkout. Migration drift, weighted assignments, static collection, and the smoke test
 must also pass. This is distinct from GeoView's lightweight unit-only CI.
 
 ## TestPyPI

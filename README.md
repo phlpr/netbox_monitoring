@@ -4,13 +4,13 @@ Manage desired monitoring configuration in NetBox using reusable profiles, typed
 checks, and justified exceptions for individual NetBox objects.
 
 Configure monitoring independently of a specific backend, using central
-maintenance permissions, native NetBox profile fields, and a shared check key
+maintenance permissions, plugin-owned profile assignments, and a shared check key
 catalog. External adapters consume the configuration and apply it to a
 monitoring backend.
 
 ## Status and compatibility
 
-Initial release version: **0.1.0**. Minimum NetBox version: **4.6.10**.
+Development version: **0.2.0.dev1** (weighted profile assignments). Minimum NetBox version: **4.6.10**.
 Python **3.12 or later** is required. Integration tests pass on NetBox **4.6.10** and **4.7.0** with PostgreSQL and Redis.
 Browser flows are verified on 4.7.0. Other versions have not yet been verified.
 
@@ -23,8 +23,9 @@ are outside this initial implementation.
 
 ## Features
 
-- One optional monitoring profile per asset, selected through a native Object
-  custom field when creating or editing a supported NetBox object.
+- Multiple monitoring profiles per asset, managed in a dedicated Monitoring profiles
+  card on object detail pages. Assignments have a weight (default 100) and an enabled flag.
+  No native custom field is created.
 - Profiles restricted by native Object type(s) and optional platform. Retired profiles can
   remain effective for existing assignments while being hidden from new choices.
 - A globally unique check key catalog with descriptions and a single check type
@@ -37,14 +38,15 @@ are outside this initial implementation.
   exports when the caller cannot read every relevant rule or active exception.
 - UI lists, detail pages, editing, change previews, bulk editing/deletion, imports,
   global search, and Monitoring tabs on supported objects with an
-  authorized Add asset Exception button prefilled for the current asset/profile.
+  authorized Add asset Exception button prefilled for the current asset.
 - Native tags, comments, custom fields, journals, and changelog integration.
 - REST CRUD, profile impact reporting, monitored-asset discovery, and per-asset
   effective configuration endpoints.
 - Protection against invalid scope changes, duplicate checks, deleting referenced
-  rules or assigned profiles, and switching profiles with active exceptions.
+  assigned profiles, and changes that would invalidate active exceptions or create
+  conflicting definitions at equal weights.
 
-Profiles have no inheritance, multiple-profile composition, or separate revision
+Profiles compose through weighted assignments; there is no separate revision
 model. Saved changes immediately change the desired configuration. An external
 adapter is responsible for applying that configuration to a monitoring backend.
 
@@ -86,25 +88,36 @@ cd /opt/netbox/netbox
 /opt/netbox/venv/bin/python manage.py collectstatic --no-input
 ```
 
-Preview the native profile selector, then create or extend it explicitly:
-
-```bash
-/opt/netbox/venv/bin/python manage.py setup_monitoring_fields
-/opt/netbox/venv/bin/python manage.py setup_monitoring_fields --apply
-```
-
 Restart your NetBox application and workers using your normal service procedure.
-The plugin UI is under `/plugins/monitoring/`.
+The plugin UI is under `/plugins/monitoring/`. Open an object's detail page and use
+**Monitoring profiles → Assign profile** to select a profile and weight. Supported
+objects are public, installed NetBox and plugin models supporting custom fields;
+the plugin's own configuration models are excluded. No selector setup is needed.
+`setup_monitoring_fields` is a deprecated compatibility command that makes no changes.
 
-The setup command creates `monitoring_profile` as a single Object field pointing
-to `netbox_monitoring.monitoringprofile`, available on all public, installed
-NetBox and plugin object types supporting custom fields. The plugin's own monitoring
-configuration models are excluded to avoid recursive monitoring. It has no default and assigns no profiles to
-existing assets. Only profiles with status `active` appear in the selector. Profiles with status
-`disabled` remain effective for existing assignments. Compatible
-existing fields are extended to additional supported object types with `--apply`;
-existing profile scopes and asset assignments remain unchanged. Incompatible fields cause an error.
-Rerun this command after installing another plugin to enable its supported object types.
+### Upgrade from 0.1.x
+
+Back up the database and stop application processes and workers before upgrading.
+Run migrations, collect static files, and restart them with the new plugin version.
+The migration converts existing `monitoring_profile` values into enabled profile
+assignments with weight **100**, including existing selections of disabled profiles.
+It preserves unrelated custom field values, removes the old selector and its JSON
+values, and retains existing asset exceptions. Invalid profile references, scope
+mismatches, unrelated fields with the same name, or duplicate exceptions for an
+asset/key stop the migration with an error so they can be corrected without losing data.
+
+Adapters must support **schema version 2** before this upgrade. The `profiles` list
+replaces the assumption of a single profile. A compatibility `profile` object is
+included only when exactly one enabled assignment exists; otherwise it is `null`.
+Exceptions now select an asset and key, without a profile or base-rule reference.
+Old profile/rule IDs are retained internally as optional historical provenance.
+Single-profile behavior and `config_hash` remain unchanged by the migration.
+
+A downgrade can restore the selector only while assignments still fit the old
+single-profile model (enabled, weight 100, one per asset) and exceptions can be
+represented by its rules. Otherwise restore the database backup together with the
+old plugin version. Disabling the plugin hides its card and leaves only plugin-owned
+assignment records; it creates no selector remnants in native custom fields.
 
 ## Permissions
 
@@ -117,17 +130,20 @@ members the appropriate native model/object permissions for:
 - `netbox_monitoring.monitoringassetoverride`
 
 Central group membership and native permissions are both required for UI and API
-writes. Group membership alone grants no object access. Superusers retain access.
+writes to these catalogue and exception models. Group membership alone grants no object access. Superusers retain access.
 Read permissions on related platforms, profiles, checks, and assets are also
 validated where applicable.
 
-Asset users select profiles with their normal asset permissions plus view access
-to the relevant monitoring objects. Give adapter accounts view permissions on the
-assets, profiles, all profile checks, and all active exceptions they must export.
+Asset editors manage assignments with view/change permission on the target asset,
+view permission on the selected profile, and the appropriate add/change/delete
+permission on `netbox_monitoring.monitoringprofileassignment`. They do not need
+membership in the central maintenance group. Assignment reads also require access
+to the asset and profile. Give adapter accounts view permissions on the assets,
+active assignments, profiles, check keys, all profile checks, and all active exceptions
+they must export.
 A missing permission results in an error instead of a partial configuration.
 
-The configured group and permission grants are managed by the administrator; the
-setup command creates neither automatically.
+The configured group and permission grants are managed by the administrator; neither is created automatically.
 
 Profile status uses the native NetBox choice format with `active` (green) and
 `disabled` (gray). It can be configured through
@@ -174,7 +190,29 @@ only on the key and exposed as a derived, read-only API field on rules and
 exceptions. The resolved export keeps string key names and the check type. Targets identify what is checked.
 Changes merge only at the top parameter level; lists are replaced in full. A
 `change` cannot alter type or target. An `add` selects its own catalog key and target;
-`disable` references an existing rule and carries no parameter changes.
+`disable` selects a key in the effective profile configuration and carries no parameter changes.
+
+### Multiple profiles and weights
+
+Checks with different keys combine. For the same key, the assignment with the
+**highest weight** supplies the complete check definition, including target,
+parameters, and enabled state. Parameters from different profiles are not blended.
+At equal highest weights, identical definitions are accepted; different definitions
+are rejected as a conflict. Increasing the weight resolves the conflict explicitly.
+Asset exceptions are applied afterwards, by key, to the winning check.
+
+For example, assign `Linux Standard` at weight 100 (`disk.all`: Warning 80,
+Critical 90) and `Database Servers` at weight 200 (`disk.all`: Warning 85,
+Critical 95 plus `process.postgres`). The asset receives the database disk check
+and the additional process check. An asset exception `{"warning": 88}` then changes
+only Warning to 88 while Critical remains 95. Removing the database assignment
+falls back to the standard disk check, followed by the same asset exception.
+
+Disabling an assignment removes that profile from composition. Profile status
+`disabled` only blocks new assignments; existing assignments keep working.
+Active change/disable exceptions require a matching effective check. Assignment or
+rule changes/deletions that would leave them without one are rejected. Disable or
+remove the exception first, or provide the key through another profile.
 
 ### Check parameters
 
@@ -212,11 +250,13 @@ All endpoints require authentication and use normal NetBox API tokens:
 ```text
 /api/plugins/monitoring/monitoring-profiles/
 /api/plugins/monitoring/monitoring-profiles/<id>/impact/
+/api/plugins/monitoring/monitoring-profile-assignments/
 /api/plugins/monitoring/monitoring-check-keys/
 /api/plugins/monitoring/monitoring-check-rules/
 /api/plugins/monitoring/monitoring-asset-overrides/
 /api/plugins/monitoring/assets/
 /api/plugins/monitoring/assets/<app_label.model>/<id>/config/
+/api/plugins/monitoring/assets/<app_label.model>/<id>/base-config/
 /api/plugins/monitoring/monitoring-effective/<app_label.model>/<id>/
 ```
 
@@ -226,21 +266,26 @@ or `ipam.ipaddress` as the object type.
 `GET /api/plugins/monitoring/assets/` discovers configured assets visible to the
 caller, with a `config_url` for each asset and limit/offset pagination. An
 existing assignment to a disabled profile remains listed because its monitoring
-configuration stays effective. An asset without a profile is omitted.
+configuration stays effective. An asset without an enabled assignment is omitted.
+Each discovery entry includes the visible enabled `profiles` with assignment IDs
+and weights; the config endpoint still requires access to every effective assignment.
 
 One GET to an asset's `/config/` URL returns its fully merged configuration,
-including active exceptions and provenance. It returns 404 for assets without a
-profile and refuses incomplete exports when permissions are missing. The
+including active exceptions and provenance. It returns 404 for assets without an
+enabled assignment and refuses incomplete exports when permissions are missing. The
 Monitoring tab links directly to this endpoint. Existing `monitoring-effective`
 URLs remain available and retain their `configured=false` response for
 unconfigured assets.
 
 The configuration endpoint returns `schema_version`, asset identity, `configured`,
-profile information, sorted checks, and per-check provenance. Configured assets
+`profiles` (ID, name, status, assignment ID, weight), sorted checks, and per-check
+provenance (winning profile, rule, assignment, weight, and applied exception).
+The `/base-config/` endpoint provides profile composition before asset exceptions
+for exception forms; use `/config/` for adapter exports. Configured assets
 also include `config_hash`: SHA-256 of the canonical check behavior, excluding
 provenance, database IDs, reasons, tickets, and expiry timestamps. The hash changes
 when expiry changes the resulting checks. An unconfigured asset returns
-`configured=false`, `profile=null`, and an empty check list.
+`configured=false`, `profiles=[]`, `profile=null`, and an empty check list.
 
 Profile impact reports include only assets visible to the caller. The exception
 API supports `active=true` / `active=false` filtering in addition to the stored
@@ -283,13 +328,15 @@ settings from NetBox's `configuration_testing.py` are used.
 
 Tests cover check semantics, inheritance and expiry, hashes, lifecycle protection,
 permission combinations, native forms and serializers, event data, REST CRUD,
-selector setup and expansion, imports, previews, changelog, and monitoring tabs.
+weighted assignments, conflict detection, selector migration and cleanup, imports,
+previews, changelog, and monitoring tabs.
 Sites and IP addresses additionally cover generic assignments, scope protection,
 exceptions, config exports, discovery, and native object permissions. Templates,
 migrations, management commands, and form JavaScript are included in the wheel.
 
 `tests/browser/monitoring.cjs` also checks the native profile form, key-driven
-parameter controls, and the asset exception flow with Playwright/Chromium.
+parameter controls, the asset exception baseline, and creating a weighted assignment
+from the native card with Playwright/Chromium.
 `tests.browser_fixture.prepare()` and `cleanup()` provide disposable fixtures and
 a private session; they refuse to run outside a `test_netbox_monitoring_` database.
 Set `MONITORING_BROWSER_STATE` to a private JSON path, run a development server
