@@ -1,4 +1,5 @@
 from copy import deepcopy
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from dcim.models import Platform
 from django.contrib.contenttypes.models import ContentType
@@ -278,3 +279,144 @@ class AssignmentPermissionTests(MonitoringTestCase):
         )
         with self.assertRaises(PermissionDenied):
             resolve_monitoring(self.vm, reader)
+
+
+class AssetTargetFormTests(MonitoringTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.admin)
+
+    def card_link(self, asset, context_key="assignment_add_url"):
+        response = self.client.get(asset.get_absolute_url() + "monitoring/")
+        self.assertEqual(response.status_code, 200)
+        return response.context[context_key]
+
+    def assert_target_locked(self, response, asset):
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertTrue(form.fields["assigned_object_type"].disabled)
+        self.assertTrue(form.fields["assigned_object_id"].disabled)
+        self.assertEqual(form.initial["assigned_object_type"], ContentType.objects.get_for_model(asset).pk)
+        self.assertEqual(form.initial["assigned_object_id"], asset.pk)
+
+    def test_card_target_stays_fixed_on_get_preview_and_forged_post(self):
+        other = MonitoringProfile.objects.create(name="Additional UI profile")
+        for asset in (self.device, self.vm):
+            with self.subTest(asset=asset):
+                link = self.card_link(asset)
+                self.assert_target_locked(self.client.get(link), asset)
+                data = {
+                    "profile": other.pk,
+                    "weight": 150,
+                    "enabled": "on",
+                    "assigned_object_type": ContentType.objects.get_for_model(self.vm_b).pk,
+                    "assigned_object_id": self.vm_b.pk,
+                }
+                preview = self.client.post(link, data | {"_preview": "1"})
+                self.assert_target_locked(preview, asset)
+                self.assertEqual(preview.context["form"].instance.assigned_object, asset)
+                self.assertFalse(
+                    MonitoringProfileAssignment.objects.filter(
+                        profile=other,
+                        assigned_object_type=ContentType.objects.get_for_model(asset),
+                        assigned_object_id=asset.pk,
+                    ).exists()
+                )
+                response = self.client.post(link, data)
+                self.assertEqual(response.status_code, 302)
+                mapping = MonitoringProfileAssignment.objects.get(
+                    profile=other,
+                    assigned_object_type=ContentType.objects.get_for_model(asset),
+                    assigned_object_id=asset.pk,
+                )
+                self.assertEqual(mapping.weight, 150)
+        self.assertFalse(
+            MonitoringProfileAssignment.objects.filter(
+                profile=other,
+                assigned_object_type=ContentType.objects.get_for_model(self.vm_b),
+                assigned_object_id=self.vm_b.pk,
+            ).exists()
+        )
+
+    def test_disabled_fields_may_be_omitted_and_add_another_keeps_context(self):
+        other = MonitoringProfile.objects.create(name="Another UI profile")
+        response = self.client.post(
+            self.card_link(self.device),
+            {
+                "profile": other.pk,
+                "weight": 100,
+                "enabled": "on",
+                "_addanother": "1",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        query = parse_qs(urlsplit(response.url).query)
+        self.assertEqual(query["assigned_object_id"], [str(self.device.pk)])
+        self.assertEqual(query["assigned_object_type"], [str(ContentType.objects.get_for_model(self.device).pk)])
+        self.assert_target_locked(self.client.get(response.url), self.device)
+        self.assertTrue(
+            MonitoringProfileAssignment.objects.filter(
+                profile=other,
+                assigned_object_type=ContentType.objects.get_for_model(self.device),
+                assigned_object_id=self.device.pk,
+            ).exists()
+        )
+
+    def test_existing_assignment_target_cannot_be_changed_via_query_or_post(self):
+        values = {
+            "assigned_object_type": ContentType.objects.get_for_model(self.device).pk,
+            "assigned_object_id": self.device.pk,
+        }
+        url = ui_url("monitoringprofileassignment", "_edit", self.assignment.pk) + "?" + urlencode(values)
+        self.assert_target_locked(self.client.get(url), self.vm)
+        response = self.client.post(url, values | {"profile": self.profile.pk, "weight": 125, "enabled": "on"})
+        self.assertEqual(response.status_code, 302)
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.assigned_object, self.vm)
+        self.assertEqual(self.assignment.weight, 125)
+
+    def test_standalone_add_can_still_select_an_asset(self):
+        url = ui_url("monitoringprofileassignment", "_add")
+        response = self.client.get(url)
+        for name in ("assigned_object_type", "assigned_object_id"):
+            self.assertFalse(response.context["form"].fields[name].disabled)
+        other = MonitoringProfile.objects.create(name="Standalone UI profile")
+        response = self.client.post(
+            url,
+            {
+                "profile": other.pk,
+                "assigned_object_type": ContentType.objects.get_for_model(self.device).pk,
+                "assigned_object_id": self.device.pk,
+                "weight": 100,
+                "enabled": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            MonitoringProfileAssignment.objects.filter(
+                profile=other,
+                assigned_object_type=ContentType.objects.get_for_model(self.device),
+                assigned_object_id=self.device.pk,
+            ).exists()
+        )
+
+    def test_exception_form_keeps_target_without_submitted_asset_fields(self):
+        link = self.card_link(self.device, "exception_add_url")
+        self.assert_target_locked(self.client.get(link), self.device)
+        response = self.client.post(
+            link,
+            {
+                "operation": "change",
+                "key": self.check_key.pk,
+                "metric": "used_percent",
+                "warning": 85,
+                "critical": 90,
+                "exclude_paths": "",
+                "reason": "Device capacity exception",
+                "enabled": "on",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        override = MonitoringAssetOverride.objects.get()
+        self.assertEqual(override.assigned_object, self.device)
+        self.assertEqual(override.parameters, {"warning": 85.0})

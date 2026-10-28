@@ -43,6 +43,19 @@ class MonitoringSaveFormMixin:
             raise AbortRequest("; ".join(error.messages)) from error
 
 
+class AssetTargetFormMixin:
+    """Keep asset-scoped forms bound to the target supplied by the view."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.assigned_object_type_id and self.instance.assigned_object_id:
+            self.initial["assigned_object_type"] = self.instance.assigned_object_type_id
+            self.initial["assigned_object_id"] = self.instance.assigned_object_id
+            for name in ("assigned_object_type", "assigned_object_id"):
+                # Django also ignores submitted values for disabled fields.
+                self.fields[name].disabled = True
+
+
 class MonitoringProfileForm(MonitoringSaveFormMixin, PrimaryModelForm):
     platform = DynamicModelChoiceField(queryset=Platform.objects.all(), required=False)
     status = ChoiceField(choices=MonitoringProfileStatusChoices, initial="active")
@@ -120,6 +133,8 @@ class CheckParameterFormMixin:
         values = data if data is not None else (self.data if self.is_bound else self.initial)
 
         def selected(name):
+            if self.fields[name].disabled:
+                return self.initial.get(name)
             return values.get(name, getattr(self.instance, name, None))
 
         ct = selected("assigned_object_type")
@@ -225,7 +240,9 @@ class MonitoringCheckRuleForm(CheckParameterFormMixin, MonitoringSaveFormMixin, 
         return data
 
 
-class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMixin, PrimaryModelForm, ParameterFields):
+class MonitoringAssetOverrideForm(
+    CheckParameterFormMixin, AssetTargetFormMixin, MonitoringSaveFormMixin, PrimaryModelForm, ParameterFields
+):
     assigned_object_type = ContentTypeChoiceField(queryset=asset_object_types())
     key = DynamicModelChoiceField(queryset=MonitoringCheckKey.objects.all())
 
@@ -275,7 +292,7 @@ class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMix
         return data
 
 
-class MonitoringProfileAssignmentForm(MonitoringSaveFormMixin, PrimaryModelForm):
+class MonitoringProfileAssignmentForm(AssetTargetFormMixin, MonitoringSaveFormMixin, PrimaryModelForm):
     profile = DynamicModelChoiceField(queryset=MonitoringProfile.objects.all(), query_params={"status": "active"})
     assigned_object_type = ContentTypeChoiceField(queryset=asset_object_types())
     fieldsets = (
