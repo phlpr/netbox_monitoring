@@ -203,6 +203,16 @@ class WeightedAssignmentTests(MonitoringTestCase):
         with self.assertRaisesMessage(ValidationError, "type/platform"):
             pending.save()
 
+    def test_key_identity_validation_reloads_prefetched_dependencies(self):
+        key = MonitoringCheckKey.objects.create(name="prefetched.key", check_type="disk")
+        pending = MonitoringCheckKey.objects.prefetch_related("rules", "asset_overrides").get(pk=key.pk)
+        MonitoringCheckRule.objects.create(profile=self.profile, key=key, target="/tmp", parameters=DEFAULTS["disk"])
+        pending.check_type = "cpu"
+        with self.assertRaisesMessage(ValidationError, "referenced key"):
+            pending.save()
+        key.refresh_from_db()
+        self.assertEqual(key.check_type, "disk")
+
 
 class AssignmentPermissionTests(MonitoringTestCase):
     def test_asset_editor_can_map_profiles_without_catalogue_maintenance_membership(self):
