@@ -296,6 +296,12 @@ class AssetTargetFormTests(MonitoringTestCase):
         form = response.context["form"]
         self.assertTrue(form.fields["assigned_object_type"].disabled)
         self.assertTrue(form.fields["assigned_object_id"].disabled)
+        self.assertTrue(form.fields["assigned_object_type"].widget.is_hidden)
+        self.assertTrue(form.fields["assigned_object_id"].widget.is_hidden)
+        self.assertNotContains(response, 'for="id_assigned_object_type"')
+        self.assertNotContains(response, 'for="id_assigned_object_id"')
+        self.assertContains(response, 'name="assigned_object_type"', count=1)
+        self.assertContains(response, 'name="assigned_object_id"', count=1)
         self.assertEqual(form.initial["assigned_object_type"], ContentType.objects.get_for_model(asset).pk)
         self.assertEqual(form.initial["assigned_object_id"], asset.pk)
 

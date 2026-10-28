@@ -1,5 +1,7 @@
 """Human-readable check forms; imports retain the structured API parameters."""
 
+from copy import deepcopy
+
 from dcim.models import Platform
 from django import forms
 from django.contrib.contenttypes.models import ContentType
@@ -54,6 +56,13 @@ class AssetTargetFormMixin:
             for name in ("assigned_object_type", "assigned_object_id"):
                 # Django also ignores submitted values for disabled fields.
                 self.fields[name].disabled = True
+                self.fields[name].widget = forms.HiddenInput()
+            if self.fieldsets:
+                self.fieldsets = deepcopy(self.fieldsets)
+                for fieldset in self.fieldsets:
+                    fieldset.items = tuple(
+                        item for item in fieldset.items if item not in ("assigned_object_type", "assigned_object_id")
+                    )
 
 
 class MonitoringProfileForm(MonitoringSaveFormMixin, PrimaryModelForm):
