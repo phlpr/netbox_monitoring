@@ -10,11 +10,14 @@ dependency on AESAI, Nagios, or op5.
 
 ## Status and compatibility
 
-Initial development version: **0.1.0.dev3**. Minimum NetBox version: **4.6.10**.
+Initial release version: **0.1.0**. Minimum NetBox version: **4.6.10**.
 Python **3.12 or later** is required. Integration tests pass on NetBox **4.6.10** and **4.7.0** with PostgreSQL and Redis.
 Browser flows are verified on 4.7.0. Other versions have not yet been verified.
 
-CI pipelines and PyPI publication are deferred. Install from a local checkout.
+GitHub Actions tests the built package and publishes through Trusted Publishing.
+See [RELEASING.md](RELEASING.md) for the manual TestPyPI and tag-based PyPI flows,
+[CHANGELOG.md](CHANGELOG.md) for release notes, and
+[COMPATIBILITY.md](COMPATIBILITY.md) for the validation scope.
 Monitoring adapters, check execution, credentials, deployment, and observed state
 are outside this initial implementation.
 
@@ -48,6 +51,12 @@ adapter is responsible for applying that configuration to a monitoring backend.
 ## Install in NetBox
 
 Use the same virtual environment as NetBox:
+
+```bash
+/opt/netbox/venv/bin/pip install netbox-monitoring
+```
+
+For development, install a local checkout in editable mode:
 
 ```bash
 /opt/netbox/venv/bin/pip install -e /path/to/netbox_monitoring

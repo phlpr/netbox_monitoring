@@ -21,9 +21,10 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["build", "ruff"]
+dev = ["build", "ruff", "twine"]
 
 [project.urls]
+Homepage = "https://github.com/phlpr/netbox_monitoring"
 Repository = "https://github.com/phlpr/netbox_monitoring"
 Issues = "https://github.com/phlpr/netbox_monitoring/issues"
 

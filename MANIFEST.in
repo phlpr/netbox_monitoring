@@ -1,3 +1,4 @@
 recursive-include tests *.py
-include scripts/test.sh
+include scripts/*.sh scripts/*.py
+include CHANGELOG.md COMPATIBILITY.md RELEASING.md
 recursive-include tests/browser *.cjs
