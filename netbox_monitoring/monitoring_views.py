@@ -56,6 +56,10 @@ class MonitoringObjectView(LoginRequiredMixin, generic.ObjectView):
                 )
             )
         )
+        if isinstance(instance, models.MonitoringProfileAssignment):
+            names = ("assigned_object", "profile", "weight", "enabled", "description")
+        elif isinstance(instance, models.MonitoringAssetOverride):
+            names = tuple(name for name in names if name not in ("profile", "rule"))
         rows = []
         for name in names:
             value = getattr(instance, name)
@@ -84,6 +88,12 @@ class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.Objec
     htmx_template_name = "netbox_monitoring/monitoring_form.html"
 
     def get_extra_context(self, request, instance):
+        if isinstance(instance, (models.MonitoringProfileAssignment, models.MonitoringAssetOverride)):
+            asset = instance.assigned_object
+            visible = (
+                asset is not None and type(asset).objects.restrict(request.user, "view").filter(pk=asset.pk).exists()
+            )
+            return {"affected_assets": [asset] if visible else []}
         profile = (
             instance
             if isinstance(instance, models.MonitoringProfile)
@@ -141,6 +151,7 @@ class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.Objec
 # Separate classes preserve conventional model/action names for NetBox links.
 for model in (
     models.MonitoringProfile,
+    models.MonitoringProfileAssignment,
     models.MonitoringCheckKey,
     models.MonitoringCheckRule,
     models.MonitoringAssetOverride,
@@ -201,7 +212,9 @@ for model in (
 
 
 def monitoring_tab_context(view, request, instance):
-    context = {}
+    from .template_content import assignment_card_context
+
+    context = assignment_card_context(request, instance)
     try:
         context["monitoring"] = resolve_monitoring(instance, request.user)
         if context["monitoring"]["configured"]:
@@ -211,7 +224,6 @@ def monitoring_tab_context(view, request, instance):
             ):
                 query = urlencode(
                     {
-                        "profile": context["monitoring"]["profile"]["id"],
                         "assigned_object_type": ContentType.objects.get_for_model(instance).pk,
                         "assigned_object_id": instance.pk,
                         "return_url": reverse(get_viewname(instance, "monitoring"), args=[instance.pk]),

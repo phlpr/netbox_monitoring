@@ -18,6 +18,7 @@ class MonitoringObjectJournalView(LoginRequiredMixin, generic.ObjectJournalView)
 urlpatterns = []
 for prefix, model in (
     ("monitoring-profiles", models.MonitoringProfile),
+    ("monitoring-profile-assignments", models.MonitoringProfileAssignment),
     ("monitoring-check-keys", models.MonitoringCheckKey),
     ("monitoring-check-rules", models.MonitoringCheckRule),
     ("monitoring-asset-overrides", models.MonitoringAssetOverride),

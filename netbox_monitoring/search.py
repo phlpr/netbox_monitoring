@@ -2,7 +2,13 @@
 
 from netbox.search import SearchIndex, register_search
 
-from .models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from .models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
 
 
 @register_search
@@ -30,7 +36,20 @@ class MonitoringCheckRuleIndex(SearchIndex):
 class MonitoringAssetOverrideIndex(SearchIndex):
     model = MonitoringAssetOverride
     fields = (("key", 100), ("reason", 500), ("ticket", 500), ("comments", 5000))
-    display_attrs = ("profile", "operation", "expires_at", "enabled")
+    display_attrs = ("operation", "expires_at", "enabled")
 
 
-indexes = (MonitoringProfileIndex, MonitoringCheckKeyIndex, MonitoringCheckRuleIndex, MonitoringAssetOverrideIndex)
+@register_search
+class MonitoringProfileAssignmentIndex(SearchIndex):
+    model = MonitoringProfileAssignment
+    fields = (("profile", 100), ("description", 500), ("comments", 5000))
+    display_attrs = ("profile", "weight", "enabled")
+
+
+indexes = (
+    MonitoringProfileAssignmentIndex,
+    MonitoringProfileIndex,
+    MonitoringCheckKeyIndex,
+    MonitoringCheckRuleIndex,
+    MonitoringAssetOverrideIndex,
+)

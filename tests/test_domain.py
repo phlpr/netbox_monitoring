@@ -9,9 +9,15 @@ from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from virtualization.models import VirtualMachine
 
-from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from netbox_monitoring.models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
 from netbox_monitoring.monitoring_resolver import resolve_monitoring
-from netbox_monitoring.monitoring_schema import DEFAULTS, PROFILE_FIELD
+from netbox_monitoring.monitoring_schema import DEFAULTS
 
 from .base import MonitoringTestCase
 
@@ -69,8 +75,13 @@ class MonitoringDomainTests(MonitoringTestCase):
         self.profile.save()
         self.vm.full_clean()
         self.assertTrue(self.resolve()["configured"])
-        with self.assertRaises(ValidationError):
-            VirtualMachine.objects.create(name="new", custom_field_data={PROFILE_FIELD: self.profile.pk})
+        new_vm = VirtualMachine.objects.create(name="new")
+        with self.assertRaisesMessage(ValidationError, "Disabled profiles"):
+            MonitoringProfileAssignment.objects.create(
+                profile=self.profile,
+                assigned_object_type=ContentType.objects.get_for_model(new_vm),
+                assigned_object_id=new_vm.pk,
+            )
 
     def test_duplicates_and_invalid_stored_dependencies_are_rejected(self):
         self.make_override()
@@ -105,16 +116,13 @@ class MonitoringDomainTests(MonitoringTestCase):
 
     def test_active_exceptions_block_profile_switch_and_inactive_exceptions_survive(self):
         override = self.make_override()
-        self.vm.custom_field_data[PROFILE_FIELD] = None
-        with self.assertRaises(ValidationError):
-            self.vm.full_clean()
-        with self.assertRaises(ValidationError):
-            self.vm.save()
+        with self.assertRaises(ProtectedError), transaction.atomic():
+            self.assignment.delete()
         override.enabled = False
         override.save()
-        self.vm.save()
+        self.assignment.delete()
         override.refresh_from_db()
-        self.assertEqual(override.profile_id, self.profile.pk)
+        self.assertIsNone(override.profile_id)
         self.assertFalse(self.resolve()["configured"])
 
     def test_asset_deletion_cleans_up_exceptions(self):
@@ -127,7 +135,8 @@ class MonitoringDomainTests(MonitoringTestCase):
         with self.assertRaises(PermissionDenied):
             resolve_monitoring(self.vm, reader)
         reader = self.user_with_permissions(
-            "rules-reader", (VirtualMachine, MonitoringProfile, MonitoringCheckRule, MonitoringCheckKey)
+            "rules-reader",
+            (VirtualMachine, MonitoringProfile, MonitoringProfileAssignment, MonitoringCheckRule, MonitoringCheckKey),
         )
         self.assertTrue(resolve_monitoring(self.vm, reader)["configured"])
         override = self.make_override()

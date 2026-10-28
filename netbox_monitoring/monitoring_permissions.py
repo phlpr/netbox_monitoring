@@ -37,6 +37,6 @@ def require_monitoring_manager(user):
 class MonitoringWriteMixin:
     def dispatch(self, request, *args, **kwargs):
         # Let LoginRequiredMixin handle anonymous users normally.
-        if request.user.is_authenticated:
+        if request.user.is_authenticated and self.queryset.model._meta.model_name != "monitoringprofileassignment":
             require_monitoring_manager(request.user)
         return super().dispatch(request, *args, **kwargs)

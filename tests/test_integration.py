@@ -7,9 +7,7 @@ from dcim.api.serializers import DeviceSerializer
 from dcim.forms import DeviceForm
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.core.management.base import CommandError
 from django.test import RequestFactory, override_settings
 from django.urls import reverse
 from extras.models import CustomField
@@ -21,7 +19,13 @@ from virtualization.forms import VirtualMachineForm
 from virtualization.models import VirtualMachine
 
 from netbox_monitoring.api.serializers import MonitoringAssetOverrideSerializer, MonitoringProfileSerializer
-from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from netbox_monitoring.models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
 from netbox_monitoring.monitoring_forms import MonitoringAssetOverrideForm, MonitoringCheckRuleForm
 from netbox_monitoring.monitoring_permissions import MonitoringRequestMiddleware, monitoring_request
 from netbox_monitoring.monitoring_schema import DEFAULTS, PROFILE_FIELD
@@ -78,21 +82,16 @@ class MonitoringIntegrationTests(MonitoringTestCase):
         self.assertTrue(any(row[0] == "Object types" for row in response.context["changes"]))
         self.assertEqual(profile.object_types.count(), 2)
 
-    def test_native_serializer_discovery_custom_fields_and_event_data(self):
+    def test_native_assets_have_no_monitoring_custom_field(self):
         self.assertIs(get_serializer_for_model(MonitoringProfile), MonitoringProfileSerializer)
         for asset, serializer_type, form_type in (
             (self.vm, VirtualMachineSerializer, VirtualMachineForm),
             (self.device, DeviceSerializer, DeviceForm),
         ):
-            with self.subTest(asset=asset):
-                form = form_type(instance=asset)
-                self.assertIn("cf_monitoring_profile", form.fields)
-                serialized = serializer_type(asset, context={"request": None}).data
-                self.assertEqual(serialized["custom_fields"][PROFILE_FIELD]["id"], self.profile.pk)
-                self.assertEqual(asset.serialize_object()["custom_fields"][PROFILE_FIELD], self.profile.pk)
-                asset.snapshot()
-                change = asset.to_objectchange("update")
-                self.assertEqual(change.postchange_data["custom_fields"][PROFILE_FIELD], self.profile.pk)
+            self.assertNotIn("cf_monitoring_profile", form_type(instance=asset).fields)
+            serialized = serializer_type(asset, context={"request": None}).data
+            self.assertNotIn(PROFILE_FIELD, serialized["custom_fields"])
+            self.assertNotIn(PROFILE_FIELD, asset.serialize_object()["custom_fields"])
 
     def test_api_crud_impact_effective_and_filters(self):
         response = self.api.post(api_url("monitoringprofile"), {"name": "Windows Standard"}, format="json")
@@ -111,7 +110,6 @@ class MonitoringIntegrationTests(MonitoringTestCase):
             api_url("monitoringassetoverride"),
             {
                 "profile": self.profile.pk,
-                "rule": self.rule.pk,
                 "key": self.rule.key_id,
                 "operation": "change",
                 "assigned_object_type": "virtualization.virtualmachine",
@@ -141,11 +139,12 @@ class MonitoringIntegrationTests(MonitoringTestCase):
         response = self.api.patch(url, {"custom_fields": {PROFILE_FIELD: incompatible.pk}}, format="json")
         self.assertEqual(response.status_code, 400, response.data)
         self.vm.refresh_from_db()
-        self.assertEqual(self.vm.custom_field_data[PROFILE_FIELD], self.profile.pk)
+        self.assertNotIn(PROFILE_FIELD, self.vm.custom_field_data)
 
     def test_list_detail_forms_tabs_journal_and_changelog_render(self):
         for model, instance in (
             ("monitoringprofile", self.profile),
+            ("monitoringprofileassignment", self.assignment),
             ("monitoringcheckkey", self.check_key),
             ("monitoringcheckrule", self.rule),
             ("monitoringassetoverride", self.make_override()),
@@ -213,7 +212,7 @@ class MonitoringIntegrationTests(MonitoringTestCase):
         form = MonitoringAssetOverrideForm(
             data={
                 "profile": self.profile.pk,
-                "rule": self.rule.pk,
+                "key": self.rule.key_id,
                 "operation": "change",
                 "assigned_object_type": ContentType.objects.get_for_model(self.vm).pk,
                 "assigned_object_id": self.vm.pk,
@@ -236,7 +235,7 @@ class MonitoringIntegrationTests(MonitoringTestCase):
             instance=override,
             data={
                 "profile": self.profile.pk,
-                "rule": self.rule.pk,
+                "key": self.rule.key_id,
                 "operation": "change",
                 "assigned_object_type": ContentType.objects.get_for_model(self.vm).pk,
                 "assigned_object_id": self.vm.pk,
@@ -251,20 +250,33 @@ class MonitoringIntegrationTests(MonitoringTestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertEqual(form.save().parameters, {"warning": 85.0})
 
-    def test_setup_is_previewable_idempotent_and_refuses_legacy_field(self):
-        out = StringIO()
-        call_command("setup_monitoring_fields", apply=True, stdout=out)
-        self.assertIn("already exists", out.getvalue())
-        field = CustomField.objects.get(name=PROFILE_FIELD)
-        field.related_object_type = ContentType.objects.get_for_model(VirtualMachine)
-        field.save()
-        with self.assertRaises(CommandError):
-            call_command("setup_monitoring_fields", apply=True, stdout=StringIO())
-        field.delete()
-        out = StringIO()
-        call_command("setup_monitoring_fields", stdout=out)
-        self.assertIn("Would create", out.getvalue())
-        self.assertFalse(CustomField.objects.filter(name=PROFILE_FIELD).exists())
+    def test_inactive_exception_reason_edit_survives_removal_of_assignments(self):
+        override = self.make_override(enabled=False)
+        self.assignment.delete()
+        form = MonitoringAssetOverrideForm(
+            instance=override,
+            data={
+                "operation": "change",
+                "key": self.rule.key_id,
+                "assigned_object_type": ContentType.objects.get_for_model(self.vm).pk,
+                "assigned_object_id": self.vm.pk,
+                "metric": "used_percent",
+                "warning": 85,
+                "critical": 90,
+                "exclude_paths": "",
+                "reason": "Updated historical explanation",
+                "enabled": False,
+            },
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.save().parameters, {"warning": 85.0})
+
+    def test_deprecated_setup_never_creates_a_custom_field(self):
+        for apply in (False, True):
+            output = StringIO()
+            call_command("setup_monitoring_fields", apply=apply, stdout=output)
+            self.assertIn("No custom fields", output.getvalue())
+            self.assertFalse(CustomField.objects.filter(name=PROFILE_FIELD).exists())
 
 
 class MonitoringPermissionTests(MonitoringTestCase):
@@ -314,7 +326,6 @@ class MonitoringPermissionTests(MonitoringTestCase):
         serializer = MonitoringAssetOverrideSerializer(
             data={
                 "profile": self.profile.pk,
-                "rule": self.rule.pk,
                 "key": self.rule.key_id,
                 "assigned_object_type": "virtualization.virtualmachine",
                 "assigned_object_id": self.vm.pk,
@@ -325,17 +336,15 @@ class MonitoringPermissionTests(MonitoringTestCase):
             context={"request": request},
         )
         self.assertFalse(serializer.is_valid())
-        with self.assertRaises(ValidationError):
-            # Exercise request-scoped validation on a native asset, independently
-            # of an API nested serializer rejecting the profile first.
-            token = monitoring_request.set(request)
-            try:
-                self.vm.full_clean()
-            finally:
-                monitoring_request.reset(token)
+        # Ordinary native edits no longer select or change a profile.
+        token = monitoring_request.set(request)
+        try:
+            self.vm.full_clean()
+        finally:
+            monitoring_request.reset(token)
 
     def test_impact_reports_only_visible_assets(self):
-        user = self.user_with_permissions("impact", (MonitoringProfile,))
+        user = self.user_with_permissions("impact", (MonitoringProfile, MonitoringProfileAssignment))
         permission_user = self.user_with_permissions("visible-vm", (VirtualMachine,), constraints={"pk": self.vm.pk})
         permission = permission_user.object_permissions.first()
         permission.users.add(user)

@@ -12,22 +12,29 @@ from rest_framework.permissions import SAFE_METHODS, BasePermission, IsAuthentic
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from ..assets import asset_config_url, asset_models, is_asset_model
-from ..models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from ..assets import asset_config_url, is_asset_model
+from ..models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
 from ..monitoring_filtersets import (
     MonitoringAssetOverrideFilterSet,
     MonitoringCheckKeyFilterSet,
     MonitoringCheckRuleFilterSet,
+    MonitoringProfileAssignmentFilterSet,
     MonitoringProfileFilterSet,
 )
 from ..monitoring_models import assigned_assets
 from ..monitoring_permissions import can_manage_monitoring
 from ..monitoring_resolver import resolve_monitoring
-from ..monitoring_schema import PROFILE_FIELD
 from .serializers import (
     MonitoringAssetOverrideSerializer,
     MonitoringCheckKeySerializer,
     MonitoringCheckRuleSerializer,
+    MonitoringProfileAssignmentSerializer,
     MonitoringProfileSerializer,
 )
 
@@ -87,8 +94,16 @@ class MonitoringAssetOverrideViewSet(MonitoringViewSet):
     filterset_class = MonitoringAssetOverrideFilterSet
 
 
+class MonitoringProfileAssignmentViewSet(NetBoxModelViewSet):
+    permission_classes = (*NetBoxModelViewSet.permission_classes, IsAuthenticated)
+    queryset = MonitoringProfileAssignment.objects.select_related("profile", "assigned_object_type")
+    serializer_class = MonitoringProfileAssignmentSerializer
+    filterset_class = MonitoringProfileAssignmentFilterSet
+
+
 class MonitoringEffectiveView(APIView):
     permission_classes = (IsAuthenticated,)
+    include_overrides = True
 
     def get(self, request, object_type, pk):
         try:
@@ -99,7 +114,7 @@ class MonitoringEffectiveView(APIView):
             raise NotFound("Unsupported monitoring asset type.")
         asset = get_object_or_404(model.objects.restrict(request.user, "view"), pk=pk)
         try:
-            return Response(resolve_monitoring(asset, request.user))
+            return Response(resolve_monitoring(asset, request.user, include_overrides=self.include_overrides))
         except DjangoValidationError as error:
             raise serializers.ValidationError(error.messages)
 
@@ -118,29 +133,50 @@ class MonitoringAssetListView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
-        profiles = {profile.pk: profile for profile in MonitoringProfile.objects.restrict(request.user, "view")}
         assets = []
-        for model in asset_models():
-            queryset = (
-                model.objects.restrict(request.user, "view")
-                .filter(**{f"custom_field_data__{PROFILE_FIELD}__isnull": False})
-                .exclude(**{f"custom_field_data__{PROFILE_FIELD}": None})
-                .order_by("pk")
+        assignments = (
+            MonitoringProfileAssignment.objects.restrict(request.user, "view")
+            .filter(enabled=True)
+            .select_related("profile", "assigned_object_type")
+        )
+        grouped = {}
+        for assignment in assignments.order_by(
+            "assigned_object_type__app_label",
+            "assigned_object_type__model",
+            "assigned_object_id",
+            "-weight",
+            "profile_id",
+        ):
+            identity = (assignment.assigned_object_type_id, assignment.assigned_object_id)
+            if identity not in grouped:
+                asset = assignment.assigned_object
+                if asset is None:
+                    continue
+                grouped[identity] = {
+                    "object_type": asset._meta.label_lower,
+                    "id": asset.pk,
+                    "name": str(asset),
+                    "profiles": [],
+                    "config_url": asset_config_url(asset, request),
+                }
+                assets.append(grouped[identity])
+            grouped[identity]["profiles"].append(
+                {
+                    "id": assignment.profile_id,
+                    "name": assignment.profile.name,
+                    "status": assignment.profile.status,
+                    "assignment_id": assignment.pk,
+                    "weight": assignment.weight,
+                }
             )
-            for asset in queryset:
-                profile = profiles.get(asset.custom_field_data.get(PROFILE_FIELD))
-                if profile is not None:
-                    assets.append(
-                        {
-                            "object_type": asset._meta.label_lower,
-                            "id": asset.pk,
-                            "name": str(asset),
-                            "profile": {"id": profile.pk, "name": profile.name, "status": profile.status},
-                            "config_url": asset_config_url(asset, request),
-                        }
-                    )
         paginator = LimitOffsetPagination()
         paginator.default_limit = 50
         paginator.max_limit = 1000
         page = paginator.paginate_queryset(assets, request, view=self)
         return paginator.get_paginated_response(page)
+
+
+class MonitoringAssetBaseConfigView(MonitoringAssetConfigView):
+    """Profile composition used by exception forms, before asset exceptions."""
+
+    include_overrides = False

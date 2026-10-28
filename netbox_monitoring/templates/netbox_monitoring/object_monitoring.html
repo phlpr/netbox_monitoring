@@ -9,12 +9,12 @@
   {% endif %}
 {% endblock %}
 {% block content %}
+{% include "netbox_monitoring/profile_assignments_card.html" %}
 {% if monitoring_error %}<div class="alert alert-danger">{{ monitoring_error }}</div>
-{% elif not monitoring.configured %}<div class="alert alert-info">Monitoring not configured. Select a Monitoring Profile when editing this asset.</div>
+{% elif not monitoring.configured %}<div class="alert alert-info">Monitoring not configured. Assign a profile using the Monitoring profiles card.</div>
 {% else %}
 <div class="card mb-3"><h5 class="card-header">Effective monitoring configuration</h5>
-<div class="card-body"><strong>{{ monitoring.profile.name }}</strong>
-{% if monitoring.profile.status != 'active' %}<span class="badge text-bg-secondary">Existing assignments only</span>{% endif %}
+<div class="card-body">{% for profile in monitoring.profiles %}<span class="badge text-bg-primary">{{ profile.name }} · {{ profile.weight }}</span> {% endfor %}
 <p class="text-muted mb-0">Desired configuration in NetBox. Deployment status is supplied by the external monitoring adapter.</p>
 </div>
 <div class="table-responsive"><table class="table table-hover">
@@ -24,8 +24,8 @@
 <td><code>{{ check.parameters_text }}</code></td><td>{{ check.enabled|yesno:"Yes,No" }}</td>
 <td>{% if check.source.override_id %}Asset exception: {{ check.source.reason }}
 {% if check.source.expires_at %}<br>Expires: {{ check.source.expires_at }}{% endif %}
-{% else %}Profile{% endif %}</td></tr>
-{% empty %}<tr><td colspan="6">This profile contains no checks.</td></tr>{% endfor %}</tbody></table></div>
+{% else %}{{ check.source.profile_name }} (weight {{ check.source.weight }}){% endif %}</td></tr>
+{% empty %}<tr><td colspan="6">The assigned profiles contain no checks.</td></tr>{% endfor %}</tbody></table></div>
 </div>
 {% endif %}
 {% endblock %}
