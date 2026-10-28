@@ -30,6 +30,9 @@ def assigned_assets(profile, user=None):
 
 class MonitoringModel(PrimaryModel):
     description = models.TextField(blank=True)
+    # Keep the inherited field's migration state stable across NetBox 4.6/4.7:
+    # 4.7 adds related_name="+" to OwnerMixin without changing its database column.
+    owner = models.ForeignKey("users.Owner", on_delete=models.PROTECT, blank=True, null=True)
 
     class Meta:
         abstract = True
