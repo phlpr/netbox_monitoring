@@ -35,7 +35,7 @@ No long-lived PyPI API token is required. TestPyPI and PyPI are separate indices
    python -m build
    python -m twine check --strict dist/*
    python scripts/check_distribution.py
-   python scripts/release_notes.py v0.1.0 \
+   python scripts/release_notes.py v0.2.0 \
      --repository phlpr/netbox_monitoring \
      --version-file netbox_monitoring/version.py \
      --output /tmp/monitoring-release-notes.md
@@ -65,11 +65,10 @@ dependencies already installed:
 
 ```bash
 python -m pip install --no-deps --index-url https://test.pypi.org/simple/ \
-  netbox-monitoring==0.1.0
+  netbox-monitoring==0.2.0
 ```
 
-Run NetBox migrations, `check`, `setup_monitoring_fields --apply`, and
-`collectstatic --no-input`. Use the isolated configuration in `tests/configuration.py`
+Run NetBox migrations, `check`, and `collectstatic --no-input`. Use the isolated configuration in `tests/configuration.py`
 and execute `tests.wheel_smoke.verify_install()` through `manage.py shell`.
 Verify imports resolve to `site-packages` and compare downloaded distribution
 hashes with the workflow's `dist` artifact. Keep the live development database and
@@ -85,6 +84,8 @@ is intended. `Publish to PyPI` checks the full suite plus tag/version/changelog
 agreement, uploads the tested distributions, then creates the GitHub release from
 the validated changelog section. Existing GitHub releases are left unchanged.
 
-The initial release has no previous-version comparison link. Later releases link
+The initial production release has no previous-version comparison link.
+TestPyPI-only changelog entries are marked explicitly and are not production
+release headings. Later releases link
 to the preceding version in the changelog. No production release is triggered
 by merging code or running the TestPyPI workflow.

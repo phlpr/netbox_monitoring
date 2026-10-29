@@ -4,6 +4,10 @@ All notable changes to NetBox Monitoring are documented here.
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-29
+
+First production PyPI release. Version 0.1.0 was published on TestPyPI only.
+
 ### Added
 
 - Replace the native profile selector with plugin-owned weighted assignments and
@@ -13,6 +17,13 @@ All notable changes to NetBox Monitoring are documented here.
 - Let asset editors manage assignments with native assignment and asset permissions.
 - Apply asset exceptions by stable check key after profile composition.
 - Export schema version 2 with assignment weights and winning check provenance.
+
+### Fixed
+
+- Revalidate current profile status, key type, asset platform, and prefetched
+  dependencies under the configuration write lock.
+- Bind asset-scoped assignment and exception forms to their target on the server,
+  including previews and Add Another, and hide target fields and their labels.
 
 ### Upgrade notes
 
@@ -26,7 +37,7 @@ All notable changes to NetBox Monitoring are documented here.
 - Downgrade requires assignments representable by the previous single selector;
   otherwise restore the matching database backup and plugin version.
 
-## 0.1.0 - 2026-10-28
+## 0.1.0 (TestPyPI only) - 2026-10-28
 
 ### Added
 

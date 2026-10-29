@@ -10,7 +10,7 @@ monitoring backend.
 
 ## Status and compatibility
 
-Development version: **0.2.0.dev1** (weighted profile assignments). Minimum NetBox version: **4.6.10**.
+Release version: **0.2.0** (weighted profile assignments). Minimum NetBox version: **4.6.10**.
 Python **3.12 or later** is required. Integration tests pass on NetBox **4.6.10** and **4.7.0** with PostgreSQL and Redis.
 Browser flows are verified on 4.7.0. Other versions have not yet been verified.
 

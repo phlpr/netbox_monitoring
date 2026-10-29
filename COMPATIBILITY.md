@@ -1,6 +1,6 @@
 # Compatibility
 
-NetBox Monitoring 0.2.0.dev1 requires Python 3.12 or later and NetBox 4.6.10 or later.
+NetBox Monitoring 0.2.0 requires Python 3.12 or later and NetBox 4.6.10 or later.
 Version numbers track plugin releases independently of NetBox.
 
 | NetBox | Python in CI | Additional local validation |
