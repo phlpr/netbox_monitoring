@@ -1,0 +1,20 @@
+{% if request.user.is_authenticated %}
+<div class="card mb-3" data-monitoring-assignments>
+  <h5 class="card-header d-flex justify-content-between align-items-center">
+    Monitoring profiles
+    {% if assignment_add_url %}<a href="{{ assignment_add_url }}" class="btn btn-sm btn-primary"><i class="mdi mdi-plus-thick" aria-hidden="true"></i> Assign profile</a>{% endif %}
+  </h5>
+  <div class="table-responsive"><table class="table table-hover mb-0">
+    <thead><tr><th>Profile</th><th>Weight</th><th>Enabled</th><th></th></tr></thead>
+    <tbody>{% for row in monitoring_assignments %}{% with assignment=row.assignment %}
+      <tr><td><a href="{{ assignment.profile.get_absolute_url }}">{{ assignment.profile }}</a>{% if assignment.profile.status != 'active' %} <span class="badge text-bg-secondary">Disabled for new assignments</span>{% endif %}</td>
+      <td>{{ assignment.weight }}</td><td>{{ assignment.enabled|yesno:"Yes,No" }}</td>
+      <td class="text-end text-nowrap">
+        {% if row.can_edit %}<a class="btn btn-sm btn-warning" href="{% url 'plugins:netbox_monitoring:monitoringprofileassignment_edit' pk=assignment.pk %}?return_url={{ object.get_absolute_url|urlencode }}" aria-label="Edit assignment"><i class="mdi mdi-pencil" aria-hidden="true"></i></a>{% endif %}
+        {% if row.can_delete %}<a class="btn btn-sm btn-danger" href="{% url 'plugins:netbox_monitoring:monitoringprofileassignment_delete' pk=assignment.pk %}?return_url={{ object.get_absolute_url|urlencode }}" aria-label="Remove assignment"><i class="mdi mdi-trash-can-outline" aria-hidden="true"></i></a>{% endif %}
+      </td></tr>
+    {% endwith %}{% empty %}<tr><td colspan="4" class="text-muted">No visible profile assignments.</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <div class="card-footer text-muted">Higher weights take precedence for the same check key.</div>
+</div>
+{% endif %}

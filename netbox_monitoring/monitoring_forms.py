@@ -1,7 +1,10 @@
 """Human-readable check forms; imports retain the structured API parameters."""
 
+from copy import deepcopy
+
 from dcim.models import Platform
 from django import forms
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.urls import reverse
 from netbox.forms import NetBoxModelFilterSetForm, PrimaryModelBulkEditForm, PrimaryModelForm, PrimaryModelImportForm
@@ -22,7 +25,15 @@ from utilities.forms.rendering import FieldSet
 
 from .assets import asset_object_types
 from .choices import MonitoringProfileStatusChoices
-from .models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from .models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
+from .monitoring_composition import compose
+from .monitoring_permissions import monitoring_request
 from .monitoring_schema import CHECK_TYPES, DEFAULTS, METRICS, RECORD_TYPES, changed_parameters
 
 
@@ -32,6 +43,26 @@ class MonitoringSaveFormMixin:
             return super().save(commit=commit)
         except ValidationError as error:
             raise AbortRequest("; ".join(error.messages)) from error
+
+
+class AssetTargetFormMixin:
+    """Keep asset-scoped forms bound to the target supplied by the view."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.assigned_object_type_id and self.instance.assigned_object_id:
+            self.initial["assigned_object_type"] = self.instance.assigned_object_type_id
+            self.initial["assigned_object_id"] = self.instance.assigned_object_id
+            for name in ("assigned_object_type", "assigned_object_id"):
+                # Django also ignores submitted values for disabled fields.
+                self.fields[name].disabled = True
+                self.fields[name].widget = forms.HiddenInput()
+            if self.fieldsets:
+                self.fieldsets = deepcopy(self.fieldsets)
+                for fieldset in self.fieldsets:
+                    fieldset.items = tuple(
+                        item for item in fieldset.items if item not in ("assigned_object_type", "assigned_object_id")
+                    )
 
 
 class MonitoringProfileForm(MonitoringSaveFormMixin, PrimaryModelForm):
@@ -76,9 +107,13 @@ class CheckParameterFormMixin:
             if selected_key:
                 kind = selected_key.check_type
         base = DEFAULTS.get(kind, {})
-        if isinstance(self.instance, MonitoringAssetOverride) and self.instance.rule_id:
-            kind = self.instance.rule.check_type
-            base = changed_parameters(self.instance.rule.parameters, self.instance.parameters)
+        if isinstance(self.instance, MonitoringAssetOverride):
+            check = self.effective_base()
+            if check:
+                kind = check["check_type"]
+                base = changed_parameters(check["parameters"], self.instance.parameters)
+            elif self.instance.pk:
+                base = changed_parameters(DEFAULTS.get(kind, {}), self.instance.parameters)
         elif self.instance.pk:
             base = self.instance.parameters
         for key, value in base.items():
@@ -92,13 +127,47 @@ class CheckParameterFormMixin:
                 "data-monitoring-keys-url": reverse("plugins-api:netbox_monitoring-api:monitoringcheckkey-list"),
             }
         )
-        if "rule" in self.fields:
-            self.fields["rule"].widget.attrs["data-monitoring-rule"] = ""
-            self.fields["rule"].widget.attrs["data-monitoring-rules-url"] = reverse(
-                "plugins-api:netbox_monitoring-api:monitoringcheckrule-list"
-            )
         if "operation" in self.fields:
+            import json
+
             self.fields["operation"].widget.attrs["data-monitoring-operation"] = ""
+            self.fields["assigned_object_type"].widget.attrs["data-monitoring-object-types"] = json.dumps(
+                {str(ct.pk): f"{ct.app_label}.{ct.model}" for ct in asset_object_types()}
+            )
+            self.fields["assigned_object_type"].widget.attrs["data-monitoring-assets-url"] = reverse(
+                "plugins-api:netbox_monitoring-api:monitored-assets"
+            )
+
+    def effective_base(self, data=None):
+        values = data if data is not None else (self.data if self.is_bound else self.initial)
+
+        def selected(name):
+            if self.fields[name].disabled:
+                return self.initial.get(name)
+            return values.get(name, getattr(self.instance, name, None))
+
+        ct = selected("assigned_object_type")
+        asset_id = selected("assigned_object_id")
+        key = selected("key")
+        if not ct or not asset_id or not key:
+            return None
+        try:
+            ct = ct if isinstance(ct, ContentType) else ContentType.objects.filter(pk=ct).first()
+            asset = ct.model_class().objects.filter(pk=asset_id).first() if ct and ct.model_class() else None
+            key = key if isinstance(key, MonitoringCheckKey) else MonitoringCheckKey.objects.filter(pk=key).first()
+        except (ValueError, TypeError):
+            return None
+        if asset is None or key is None:
+            return None
+        from .assets import is_asset_model
+
+        if not is_asset_model(type(asset)):
+            return None
+        request = monitoring_request.get()
+        if request and not type(asset).objects.restrict(request.user, "view").filter(pk=asset.pk).exists():
+            return None
+        _, checks = compose(asset, user=request.user if request else None, include_overrides=False)
+        return next((check for check in checks if check["key"] == key.name), None)
 
     def build_parameters(self, kind, data):
         if kind in METRICS:
@@ -180,26 +249,18 @@ class MonitoringCheckRuleForm(CheckParameterFormMixin, MonitoringSaveFormMixin, 
         return data
 
 
-class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMixin, PrimaryModelForm, ParameterFields):
-    profile = DynamicModelChoiceField(queryset=MonitoringProfile.objects.all())
-    rule = DynamicModelChoiceField(
-        queryset=MonitoringCheckRule.objects.all(), required=False, query_params={"profile_id": "$profile"}
-    )
+class MonitoringAssetOverrideForm(
+    CheckParameterFormMixin, AssetTargetFormMixin, MonitoringSaveFormMixin, PrimaryModelForm, ParameterFields
+):
     assigned_object_type = ContentTypeChoiceField(queryset=asset_object_types())
-    key = DynamicModelChoiceField(
-        queryset=MonitoringCheckKey.objects.all(),
-        required=False,
-        help_text="For changes/disabling this is taken from the selected rule.",
-    )
+    key = DynamicModelChoiceField(queryset=MonitoringCheckKey.objects.all())
 
     class Meta:
         model = MonitoringAssetOverride
         fields = (
-            "profile",
             "assigned_object_type",
             "assigned_object_id",
             "operation",
-            "rule",
             "key",
             "target",
             "parameters",
@@ -214,28 +275,61 @@ class MonitoringAssetOverrideForm(CheckParameterFormMixin, MonitoringSaveFormMix
 
     def clean(self):
         data = super().clean() or self.cleaned_data
-        rule = data.get("rule")
         operation = data.get("operation")
-        if operation in ("change", "disable") and rule:
-            data["key"] = rule.key
+        key = data.get("key")
+        if operation in ("change", "disable") and key:
             data["target"] = ""
             if operation == "disable":
                 data["parameters"] = {}
             else:
-                params = self.build_parameters(rule.check_type, data)
-                # Preserve explicit existing values when the baseline catches up.
-                # Otherwise even a reason-only edit would erase their future intent.
+                check = self.effective_base(data)
+                if check is None:
+                    if data.get("enabled"):
+                        raise ValidationError("Select a key present in the asset's effective profile configuration.")
+                    check = {"parameters": DEFAULTS[key.check_type]}
+                params = self.build_parameters(key.check_type, data)
                 existing_keys = (
                     set(self.instance.parameters)
-                    if (self.instance.pk and self.instance.rule_id == rule.pk and self.instance.operation == "change")
+                    if (self.instance.pk and self.instance.key_id == key.pk and self.instance.operation == "change")
                     else set()
                 )
                 data["parameters"] = {
-                    k: v for k, v in params.items() if v != rule.parameters.get(k) or k in existing_keys
+                    k: v for k, v in params.items() if v != check["parameters"].get(k) or k in existing_keys
                 }
-        elif operation == "add" and data.get("key"):
-            data["parameters"] = self.build_parameters(data["key"].check_type, data)
+        elif operation == "add" and key:
+            data["parameters"] = self.build_parameters(key.check_type, data)
         return data
+
+
+class MonitoringProfileAssignmentForm(AssetTargetFormMixin, MonitoringSaveFormMixin, PrimaryModelForm):
+    profile = DynamicModelChoiceField(queryset=MonitoringProfile.objects.all(), query_params={"status": "active"})
+    assigned_object_type = ContentTypeChoiceField(queryset=asset_object_types())
+    fieldsets = (
+        FieldSet(
+            "assigned_object_type",
+            "assigned_object_id",
+            "profile",
+            "weight",
+            "enabled",
+            "description",
+            "tags",
+            name="Monitoring profile assignment",
+        ),
+    )
+
+    class Meta:
+        model = MonitoringProfileAssignment
+        fields = (
+            "assigned_object_type",
+            "assigned_object_id",
+            "profile",
+            "weight",
+            "enabled",
+            "description",
+            "owner",
+            "comments",
+            "tags",
+        )
 
 
 class MonitoringProfileImportForm(MonitoringSaveFormMixin, PrimaryModelImportForm):
@@ -267,11 +361,9 @@ class MonitoringAssetOverrideImportForm(MonitoringSaveFormMixin, PrimaryModelImp
     class Meta:
         model = MonitoringAssetOverride
         fields = (
-            "profile",
             "assigned_object_type",
             "assigned_object_id",
             "operation",
-            "rule",
             "key",
             "target",
             "parameters",
@@ -304,7 +396,6 @@ class MonitoringCheckKeyFilterForm(NetBoxModelFilterSetForm):
 
 class MonitoringAssetOverrideFilterForm(NetBoxModelFilterSetForm):
     model = MonitoringAssetOverride
-    profile_id = DynamicModelChoiceField(queryset=MonitoringProfile.objects.all(), required=False)
     enabled = forms.NullBooleanField(required=False)
 
 
@@ -329,4 +420,32 @@ class MonitoringCheckKeyBulkEditForm(MonitoringBulkEditForm):
 
 class MonitoringAssetOverrideBulkEditForm(MonitoringBulkEditForm):
     model = MonitoringAssetOverride
+    enabled = forms.NullBooleanField(required=False)
+
+
+class MonitoringProfileAssignmentImportForm(MonitoringSaveFormMixin, PrimaryModelImportForm):
+    assigned_object_type = CSVContentTypeField(queryset=asset_object_types())
+
+    class Meta:
+        model = MonitoringProfileAssignment
+        fields = (
+            "assigned_object_type",
+            "assigned_object_id",
+            "profile",
+            "weight",
+            "enabled",
+            "description",
+            "comments",
+        )
+
+
+class MonitoringProfileAssignmentFilterForm(NetBoxModelFilterSetForm):
+    model = MonitoringProfileAssignment
+    profile_id = DynamicModelChoiceField(queryset=MonitoringProfile.objects.all(), required=False)
+    enabled = forms.NullBooleanField(required=False)
+
+
+class MonitoringProfileAssignmentBulkEditForm(MonitoringBulkEditForm):
+    model = MonitoringProfileAssignment
+    weight = forms.IntegerField(required=False, min_value=0)
     enabled = forms.NullBooleanField(required=False)

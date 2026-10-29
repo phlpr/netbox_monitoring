@@ -16,16 +16,46 @@ from .monitoring_schema import (
     CHECK_TYPES,
     DEFAULT_ASSET_MODELS,
     OPERATIONS,
-    PROFILE_FIELD,
-    changed_parameters,
     validate_check,
 )
 
 
 def assigned_assets(profile, user=None):
+    assignments = MonitoringProfileAssignment.objects.filter(profile=profile)
+    if user is not None:
+        assignments = assignments.restrict(user, "view")
+    for assignment in assignments.select_related("assigned_object_type"):
+        if assignment.assigned_object is not None:
+            yield assignment.assigned_object
+
+
+def restrict_assets(queryset, user, action="view"):
+    condition = models.Q(pk__in=[])
     for model in asset_models():
-        objects = model.objects.all() if user is None else model.objects.restrict(user, "view")
-        yield from objects.filter(**{f"custom_field_data__{PROFILE_FIELD}": profile.pk})
+        condition |= models.Q(
+            assigned_object_type__app_label=model._meta.app_label,
+            assigned_object_type__model=model._meta.model_name,
+            assigned_object_id__in=model.objects.restrict(user, action).values("pk"),
+        )
+    return queryset.filter(condition)
+
+
+def validate_asset_reference(instance, require_change=False):
+    if not instance.assigned_object_type_id:
+        return
+    if not is_asset_model(instance.assigned_object_type.model_class()):
+        raise ValidationError({"assigned_object_type": "Select a supported public object type."})
+    asset = instance.assigned_object
+    if asset is None:
+        raise ValidationError({"assigned_object_id": "The target asset does not exist."})
+    from .monitoring_permissions import monitoring_request
+
+    request = monitoring_request.get()
+    if request:
+        actions = ("view", "change") if require_change else ("view",)
+        for action in actions:
+            if not type(asset).objects.restrict(request.user, action).filter(pk=asset.pk).exists():
+                raise ValidationError({"assigned_object_id": f"Asset {action} permission is required."})
 
 
 class MonitoringModel(PrimaryModel):
@@ -47,11 +77,13 @@ class MonitoringModel(PrimaryModel):
         request = monitoring_request.get()
         if not request:
             return
-        for name in ("profile", "rule", "platform", "key"):
+        for name in ("profile", "platform", "key"):
+            if isinstance(self, MonitoringAssetOverride) and name == "profile":
+                continue
             related = getattr(self, name, None)
             if related and not type(related).objects.restrict(request.user, "view").filter(pk=related.pk).exists():
                 raise ValidationError({name: "View permission is required for the selected object."})
-        if isinstance(self, MonitoringAssetOverride) and self.assigned_object:
+        if isinstance(self, (MonitoringAssetOverride, MonitoringProfileAssignment)) and self.assigned_object:
             asset = self.assigned_object
             if not type(asset).objects.restrict(request.user, "view").filter(pk=asset.pk).exists():
                 raise ValidationError({"assigned_object_id": "View permission is required for the asset."})
@@ -60,25 +92,24 @@ class MonitoringModel(PrimaryModel):
         from .monitoring_permissions import monitoring_request, require_monitoring_manager
 
         request = monitoring_request.get()
-        if request:
+        if request and not isinstance(self, MonitoringProfileAssignment):
             require_monitoring_manager(request.user)
-        # Serialize profile/rule/exception writes on the owning profile. This also
-        # makes dependent override validation and the resulting write atomic.
-        with transaction.atomic(using=kwargs.get("using") or self._state.db):
-            profile_id = self.pk if isinstance(self, MonitoringProfile) else getattr(self, "profile_id", None)
-            profile_ids = {profile_id} if profile_id else set()
-            if self.pk and hasattr(self, "profile_id"):
-                previous = type(self).objects.filter(pk=self.pk).values_list("profile_id", flat=True).first()
-                if previous:
-                    profile_ids.add(previous)
-            list(MonitoringProfile.objects.select_for_update().filter(pk__in=profile_ids).order_by("pk"))
-            key_id = self.pk if isinstance(self, MonitoringCheckKey) else getattr(self, "key_id", None)
-            if key_id:
-                locked_key = MonitoringCheckKey.objects.select_for_update().get(pk=key_id)
-                if not isinstance(self, MonitoringCheckKey):
-                    self.key = locked_key
+        from .monitoring_transactions import configuration_write
+
+        with configuration_write(kwargs.get("using") or self._state.db):
+            # Forms/serializers may have cached relations before acquiring the
+            # lock. Validate current catalogue and asset state under the lock.
+            self._prefetched_objects_cache = {}
+            for name in ("profile", "key", "assigned_object_type", "assigned_object"):
+                self._state.fields_cache.pop(name, None)
             self.full_clean()
             return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        from .monitoring_transactions import configuration_write
+
+        with configuration_write(kwargs.get("using") or self._state.db):
+            return super().delete(*args, **kwargs)
 
 
 class MonitoringProfile(MonitoringModel):
@@ -213,45 +244,93 @@ class MonitoringCheckRule(MonitoringModel):
         peers = type(self).objects.filter(profile_id=self.profile_id).exclude(pk=self.pk)
         if peers.filter(key__check_type=self.check_type, target=self.target).exists():
             raise ValidationError({"target": "This profile already contains a check of this type for this target."})
+        from .monitoring_composition import validate_composition
+
+        profile_ids = {self.profile_id}
         if self.pk:
-            old = type(self).objects.get(pk=self.pk)
-            if (old.profile_id, old.key_id) != (self.profile_id, self.key_id) and self.overrides.exists():
-                raise ValidationError("A referenced check cannot change its profile or stable key.")
-            for override in self.overrides.all():
-                if override.operation == "change":
-                    validate_check(
-                        self.check_type, self.target, changed_parameters(self.parameters, override.parameters)
-                    )
-        if self.profile.overrides.filter(operation="add", key=self.key).exists():
-            raise ValidationError({"key": "An asset exception already adds a check with this key."})
-        if self.profile.overrides.filter(operation="add", key__check_type=self.check_type, target=self.target).exists():
-            raise ValidationError({"target": "An asset exception already adds this check target."})
+            profile_ids.add(type(self).objects.values_list("profile_id", flat=True).get(pk=self.pk))
+        seen = set()
+        for assignment in MonitoringProfileAssignment.objects.filter(profile_id__in=profile_ids):
+            identity = (assignment.assigned_object_type_id, assignment.assigned_object_id)
+            if identity not in seen and assignment.assigned_object:
+                validate_composition(assignment.assigned_object, candidate=self)
+                seen.add(identity)
+
+
+class MonitoringAssignmentQuerySet(RestrictedQuerySet):
+    def restrict(self, user, action="view"):
+        return restrict_assets(
+            super().restrict(user, action).filter(profile__in=MonitoringProfile.objects.restrict(user, "view")),
+            user,
+            "view" if action == "view" else "change",
+        )
+
+
+class MonitoringProfileAssignment(MonitoringModel):
+    objects = MonitoringAssignmentQuerySet.as_manager()
+    profile = models.ForeignKey(MonitoringProfile, on_delete=models.PROTECT, related_name="assignments")
+    assigned_object_type = models.ForeignKey("contenttypes.ContentType", on_delete=models.PROTECT, related_name="+")
+    assigned_object_id = models.PositiveBigIntegerField()
+    assigned_object = GenericForeignKey("assigned_object_type", "assigned_object_id")
+    weight = models.PositiveIntegerField(
+        default=100, help_text="Higher weights take precedence for the same check key."
+    )
+    enabled = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ("assigned_object_type", "assigned_object_id", "-weight", "profile")
+        verbose_name = "Monitoring Profile Assignment"
+        verbose_name_plural = "Monitoring Profile Assignments"
+        constraints = [
+            models.UniqueConstraint(
+                fields=("assigned_object_type", "assigned_object_id", "profile"),
+                name="netbox_monitoring_assignment_unique",
+            )
+        ]
+        indexes = [
+            models.Index(fields=("assigned_object_type", "assigned_object_id"), name="monitoring_assignment_asset")
+        ]
+
+    def __str__(self):
+        return f"{self.assigned_object}: {self.profile} (weight {self.weight})"
+
+    def clean(self):
+        super().clean()
+        validate_asset_reference(self, require_change=True)
+        if not self.profile_id or self.assigned_object is None:
+            return
+        if not self.profile.accepts(self.assigned_object):
+            raise ValidationError({"profile": "The profile does not support this asset type/platform."})
+        old = type(self).objects.filter(pk=self.pk).first() if self.pk else None
+        if self.profile.status != "active" and (old is None or old.profile_id != self.profile_id):
+            raise ValidationError({"profile": "Disabled profiles cannot be newly assigned."})
+        from .monitoring_composition import validate_composition
+
+        validate_composition(self.assigned_object, candidate=self)
+        if old and (old.assigned_object_type_id, old.assigned_object_id) != (
+            self.assigned_object_type_id,
+            self.assigned_object_id,
+        ):
+            if old.assigned_object:
+                validate_asset_reference(old, require_change=True)
+                validate_composition(old.assigned_object, deleted=old)
 
 
 class MonitoringOverrideQuerySet(RestrictedQuerySet):
     def restrict(self, user, action="view"):
-        qs = super().restrict(user, action).filter(profile__in=MonitoringProfile.objects.restrict(user, "view"))
-        condition = models.Q(pk__in=[])
-        for model in asset_models():
-            condition |= models.Q(
-                assigned_object_type__app_label=model._meta.app_label,
-                assigned_object_type__model=model._meta.model_name,
-                assigned_object_id__in=model.objects.restrict(user, "view").values("pk"),
-            )
-        return (
-            qs.filter(condition)
-            .filter(
-                models.Q(rule__isnull=True) | models.Q(rule__in=MonitoringCheckRule.objects.restrict(user, "view")),
-            )
-            .filter(key__in=MonitoringCheckKey.objects.restrict(user, "view"))
+        return restrict_assets(super().restrict(user, action), user).filter(
+            key__in=MonitoringCheckKey.objects.restrict(user, "view")
         )
 
 
 class MonitoringAssetOverride(MonitoringModel):
     objects = MonitoringOverrideQuerySet.as_manager()
-    profile = models.ForeignKey(MonitoringProfile, on_delete=models.PROTECT, related_name="overrides")
+    # Optional legacy provenance; exceptions now address an asset and stable key.
+    profile = models.ForeignKey(
+        MonitoringProfile, on_delete=models.SET_NULL, related_name="overrides", null=True, blank=True
+    )
     rule = models.ForeignKey(
-        MonitoringCheckRule, on_delete=models.PROTECT, related_name="overrides", null=True, blank=True
+        MonitoringCheckRule, on_delete=models.SET_NULL, related_name="overrides", null=True, blank=True
     )
     assigned_object_type = models.ForeignKey("contenttypes.ContentType", on_delete=models.PROTECT, related_name="+")
     assigned_object_id = models.PositiveBigIntegerField()
@@ -266,12 +345,12 @@ class MonitoringAssetOverride(MonitoringModel):
     enabled = models.BooleanField(default=True)
 
     class Meta:
-        ordering = ("profile", "assigned_object_type", "assigned_object_id", "key")
+        ordering = ("assigned_object_type", "assigned_object_id", "key")
         verbose_name = "Monitoring Asset Override"
         verbose_name_plural = "Monitoring Asset Overrides"
         constraints = [
             models.UniqueConstraint(
-                fields=("assigned_object_type", "assigned_object_id", "profile", "key"),
+                fields=("assigned_object_type", "assigned_object_id", "key"),
                 name="netbox_monitoring_override_key",
             )
         ]
@@ -280,7 +359,7 @@ class MonitoringAssetOverride(MonitoringModel):
         ]
 
     def __str__(self):
-        return f"{self.profile}: {self.key} ({self.assigned_object_type.app_label}.{self.assigned_object_type.model}:{self.assigned_object_id})"
+        return f"{self.key} ({self.assigned_object_type.app_label}.{self.assigned_object_type.model}:{self.assigned_object_id})"
 
     @property
     def check_type(self):
@@ -292,32 +371,17 @@ class MonitoringAssetOverride(MonitoringModel):
 
     def clean(self):
         super().clean()
-        if not self.assigned_object_type_id or not self.profile_id:
-            return
-        if not is_asset_model(self.assigned_object_type.model_class()):
-            raise ValidationError({"assigned_object_type": "Select a public object type supporting custom fields."})
-        asset = self.assigned_object
-        if asset is None:
-            raise ValidationError({"assigned_object_id": "The target asset does not exist."})
-        if self.is_active and asset.custom_field_data.get(PROFILE_FIELD) != self.profile_id:
-            raise ValidationError({"profile": "The asset must select this monitoring profile first."})
+        validate_asset_reference(self)
         if not self.reason.strip():
             raise ValidationError({"reason": "Explain why this exception is required."})
+        if not self.key_id:
+            return
         if self.operation == "add":
-            if not self.key_id:
-                return
-            if self.rule_id:
-                raise ValidationError({"rule": "Additional checks must not reference a base rule."})
             validate_check(self.check_type, self.target, self.parameters)
-            if self.profile.checks.filter(key=self.key).exists():
-                raise ValidationError({"key": "This key is already used by a profile check."})
-            if self.profile.checks.filter(key__check_type=self.check_type, target=self.target).exists():
-                raise ValidationError({"target": "This target is already checked by the profile."})
             if (
                 type(self)
                 .objects.filter(
-                    profile=self.profile,
-                    assigned_object_type=self.assigned_object_type,
+                    assigned_object_type_id=self.assigned_object_type_id,
                     assigned_object_id=self.assigned_object_id,
                     operation="add",
                     key__check_type=self.check_type,
@@ -328,17 +392,14 @@ class MonitoringAssetOverride(MonitoringModel):
             ):
                 raise ValidationError({"target": "Another exception already adds this target."})
         else:
-            if not self.rule_id or self.rule.profile_id != self.profile_id:
-                raise ValidationError({"rule": "Select a check belonging to this profile."})
-            if self.key_id != self.rule.key_id:
-                raise ValidationError({"key": "Use the stable key of the selected profile check."})
             if self.target:
-                raise ValidationError("Target is defined by the base rule; leave it empty.")
+                raise ValidationError({"target": "Target is defined by the effective profile check; leave it empty."})
             if self.operation == "disable":
                 if self.parameters:
                     raise ValidationError({"parameters": "Disabling a check must not also change parameters."})
             else:
-                validate_check(self.rule.check_type, self.rule.target, self.parameters, partial=True)
-                validate_check(
-                    self.rule.check_type, self.rule.target, changed_parameters(self.rule.parameters, self.parameters)
-                )
+                validate_check(self.check_type, "", self.parameters, partial=True)
+        if self.assigned_object:
+            from .monitoring_composition import validate_composition
+
+            validate_composition(self.assigned_object, candidate=self)

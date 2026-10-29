@@ -5,7 +5,13 @@ import json
 import django_tables2 as tables
 from netbox.tables import PrimaryModelTable, columns
 
-from .models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from .models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
 
 
 class MonitoringProfileTable(PrimaryModelTable):
@@ -89,8 +95,6 @@ class MonitoringCheckRuleTable(PrimaryModelTable):
 class MonitoringAssetOverrideTable(PrimaryModelTable):
     key = tables.Column(linkify=lambda record: record.get_absolute_url())
     check_type = tables.Column(order_by="key__check_type")
-    profile = tables.Column(linkify=True)
-    rule = tables.Column(linkify=True)
     enabled = columns.BooleanColumn()
 
     class Meta(PrimaryModelTable.Meta):
@@ -98,12 +102,10 @@ class MonitoringAssetOverrideTable(PrimaryModelTable):
         fields = (
             "pk",
             "id",
-            "profile",
             "key",
             "assigned_object_type",
             "assigned_object_id",
             "operation",
-            "rule",
             "check_type",
             "target",
             "parameters",
@@ -117,7 +119,6 @@ class MonitoringAssetOverrideTable(PrimaryModelTable):
             "actions",
         )
         default_columns = (
-            "profile",
             "key",
             "assigned_object_type",
             "assigned_object_id",
@@ -129,3 +130,30 @@ class MonitoringAssetOverrideTable(PrimaryModelTable):
 
     def value_parameters(self, value):
         return json.dumps(value, sort_keys=True)
+
+
+class MonitoringProfileAssignmentTable(PrimaryModelTable):
+    profile = tables.Column(linkify=True)
+    assigned_object = tables.Column(linkify=True, orderable=False)
+    weight = tables.Column(linkify=lambda record: record.get_absolute_url())
+    enabled = columns.BooleanColumn()
+
+    class Meta(PrimaryModelTable.Meta):
+        model = MonitoringProfileAssignment
+        fields = (
+            "pk",
+            "id",
+            "assigned_object",
+            "assigned_object_type",
+            "assigned_object_id",
+            "profile",
+            "weight",
+            "enabled",
+            "description",
+            "owner",
+            "comments",
+            "created",
+            "last_updated",
+            "actions",
+        )
+        default_columns = ("assigned_object", "profile", "weight", "enabled", "description")

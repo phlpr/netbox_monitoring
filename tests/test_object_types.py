@@ -14,8 +14,14 @@ from extras.models import CustomField
 from ipam.models import IPAddress
 from rest_framework.test import APIClient
 
-from netbox_monitoring.assets import asset_config_url, asset_object_types
-from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from netbox_monitoring.assets import asset_config_url
+from netbox_monitoring.models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
 from netbox_monitoring.monitoring_forms import (
     MonitoringAssetOverrideImportForm,
     MonitoringProfileForm,
@@ -35,8 +41,15 @@ class MonitoringObjectTypeTests(MonitoringTestCase):
 
     def make_site(self):
         self.profile.object_types.add(ContentType.objects.get_for_model(Site))
-        return Site.objects.create(
-            name="Monitored site", slug="monitored-site", custom_field_data={PROFILE_FIELD: self.profile.pk}
+        site = Site.objects.create(name="Monitored site", slug="monitored-site")
+        self.assign(site)
+        return site
+
+    def assign(self, asset, profile=None):
+        return MonitoringProfileAssignment.objects.create(
+            profile=profile or self.profile,
+            assigned_object_type=ContentType.objects.get_for_model(asset),
+            assigned_object_id=asset.pk,
         )
 
     def test_native_choices_include_more_object_types_and_exclude_internal_configuration(self):
@@ -67,13 +80,13 @@ class MonitoringObjectTypeTests(MonitoringTestCase):
         )
         self.assertEqual(response.status_code, 201, response.data)
         site = Site.objects.create(name="API site", slug="api-site")
-        self.assertIn("cf_monitoring_profile", SiteForm(instance=site).fields)
-        response = self.api.patch(
-            reverse("dcim-api:site-detail", args=[site.pk]),
-            {"custom_fields": {PROFILE_FIELD: response.data["id"]}},
+        self.assertNotIn("cf_monitoring_profile", SiteForm(instance=site).fields)
+        response = self.api.post(
+            api_url("monitoringprofileassignment"),
+            {"profile": response.data["id"], "assigned_object_type": "dcim.site", "assigned_object_id": site.pk},
             format="json",
         )
-        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(self.api.get(asset_config_url(site)).status_code, 200)
 
     def test_platform_filter_only_applies_to_models_with_a_platform(self):
@@ -84,14 +97,13 @@ class MonitoringObjectTypeTests(MonitoringTestCase):
         profile.object_types.add(ContentType.objects.get_for_model(Site))
         self.assertTrue(profile.accepts(site))
         self.assertFalse(profile.accepts(self.device))
-        site.custom_field_data[PROFILE_FIELD] = profile.pk
-        site.full_clean()
-        site.save()
+        self.assign(site, profile)
 
     def test_sites_and_ip_addresses_have_complete_config_tabs_discovery_and_exceptions(self):
         site = self.make_site()
         self.profile.object_types.add(ContentType.objects.get_for_model(IPAddress))
-        address = IPAddress.objects.create(address="192.0.2.9/32", custom_field_data={PROFILE_FIELD: self.profile.pk})
+        address = IPAddress.objects.create(address="192.0.2.9/32")
+        self.assign(address)
         self.client.force_login(self.admin)
         for asset, namespace in ((site, "dcim:site_monitoring"), (address, "ipam:ipaddress_monitoring")):
             with self.subTest(asset=asset):
@@ -133,21 +145,26 @@ class MonitoringObjectTypeTests(MonitoringTestCase):
         site.full_clean()
         site.save()
         with self.assertRaises(ValidationError):
-            Site.objects.create(name="New site", slug="new-site", custom_field_data={PROFILE_FIELD: self.profile.pk})
+            self.assign(Site.objects.create(name="New site", slug="new-site"))
         isolated = MonitoringProfile.objects.create(name="Site only")
         isolated.object_types.set([ContentType.objects.get_for_model(Site)])
-        site.custom_field_data[PROFILE_FIELD] = isolated.pk
-        site.save()
+        self.assign(site, isolated)
         with self.assertRaises(ProtectedError):
             isolated.delete()
 
     def test_new_object_types_obey_native_object_permissions(self):
         site = self.make_site()
-        hidden = Site.objects.create(
-            name="Hidden site", slug="hidden-site", custom_field_data={PROFILE_FIELD: self.profile.pk}
-        )
+        hidden = Site.objects.create(name="Hidden site", slug="hidden-site")
+        self.assign(hidden)
         reader = self.user_with_permissions(
-            "site-reader", (MonitoringProfile, MonitoringCheckKey, MonitoringCheckRule, MonitoringAssetOverride)
+            "site-reader",
+            (
+                MonitoringProfile,
+                MonitoringProfileAssignment,
+                MonitoringCheckKey,
+                MonitoringCheckRule,
+                MonitoringAssetOverride,
+            ),
         )
         site_reader = self.user_with_permissions("one-site", (Site,), constraints={"pk": site.pk})
         site_reader.object_permissions.first().users.add(reader)
@@ -175,18 +192,8 @@ class MonitoringObjectTypeTests(MonitoringTestCase):
         )
         self.assertEqual(response.status_code, 400, response.data)
 
-    def test_setup_extends_existing_field_only_with_apply_and_preserves_assignments(self):
-        field = CustomField.objects.get(name=PROFILE_FIELD)
-        field.object_types.set(self.profile.object_types.all())
-        before = dict(self.vm.custom_field_data)
-        output = StringIO()
-        call_command("setup_monitoring_fields", stdout=output)
-        self.assertIn("Would extend", output.getvalue())
-        self.assertEqual(field.object_types.count(), 2)
+    def test_deprecated_setup_preserves_assignments_without_native_custom_fields(self):
+        before = list(MonitoringProfileAssignment.objects.values())
         call_command("setup_monitoring_fields", apply=True, stdout=StringIO())
-        self.assertEqual(
-            set(field.object_types.values_list("pk", flat=True)), set(asset_object_types().values_list("pk", flat=True))
-        )
-        self.vm.refresh_from_db()
-        self.assertEqual(self.vm.custom_field_data, before)
-        self.assertEqual(self.profile.object_types.count(), 2)
+        self.assertFalse(CustomField.objects.filter(name=PROFILE_FIELD).exists())
+        self.assertEqual(list(MonitoringProfileAssignment.objects.values()), before)

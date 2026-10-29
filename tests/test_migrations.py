@@ -92,11 +92,15 @@ class ProfileMigrationTests(TransactionTestCase):
             both = Profile.objects.create(name="Legacy active both", selectable=True, asset_type="any")
             ContentType = state.get_model("contenttypes", "ContentType")
             Field = state.get_model("extras", "CustomField")
-            field = Field.objects.create(
+            field, _ = Field.objects.update_or_create(
                 name="monitoring_profile",
-                type="object",
-                related_object_type=ContentType.objects.get(app_label="netbox_monitoring", model="monitoringprofile"),
-                related_object_filter={"selectable": True},
+                defaults={
+                    "type": "object",
+                    "related_object_type": ContentType.objects.get(
+                        app_label="netbox_monitoring", model="monitoringprofile"
+                    ),
+                    "related_object_filter": {"selectable": True},
+                },
             )
             executor = MigrationExecutor(connection)
             executor.migrate(after)
@@ -117,4 +121,121 @@ class ProfileMigrationTests(TransactionTestCase):
             self.assertFalse(reverted.objects.get(pk=old.pk).selectable)
             self.assertEqual(reverted.objects.get(pk=old.pk).asset_type, "virtualmachine")
         finally:
+            MigrationExecutor(connection).migrate(latest)
+
+
+class ProfileAssignmentMigrationTests(TransactionTestCase):
+    before = [("netbox_monitoring", "0005_check_key_catalog")]
+
+    def legacy_state(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(self.before)
+        return historical_apps(executor, self.before)
+
+    def test_selector_values_and_exceptions_migrate_without_native_remnants(self):
+        executor = MigrationExecutor(connection)
+        latest = executor.loader.graph.leaf_nodes()
+        try:
+            state = self.legacy_state()
+            Profile = state.get_model("netbox_monitoring", "MonitoringProfile")
+            ContentType = state.get_model("contenttypes", "ContentType")
+            VM = state.get_model("virtualization", "VirtualMachine")
+            Field = state.get_model("extras", "CustomField")
+            profile = Profile.objects.create(name="Existing disabled profile", status="disabled")
+            ct = ContentType.objects.get(app_label="virtualization", model="virtualmachine")
+            profile.object_types.add(ct)
+            vm = VM.objects.create(
+                name="migration-vm", custom_field_data={"monitoring_profile": profile.pk, "unrelated": "keep"}
+            )
+            empty = VM.objects.create(name="migration-null", custom_field_data={"monitoring_profile": None})
+            Field.objects.update_or_create(
+                name="monitoring_profile",
+                defaults={
+                    "type": "object",
+                    "related_object_type": ContentType.objects.get(
+                        app_label="netbox_monitoring", model="monitoringprofile"
+                    ),
+                },
+            )
+            key = state.get_model("netbox_monitoring", "MonitoringCheckKey").objects.create(
+                name="disk.all", check_type="disk"
+            )
+            rule = state.get_model("netbox_monitoring", "MonitoringCheckRule").objects.create(
+                profile=profile, key=key, target="*", parameters=DEFAULTS["disk"]
+            )
+            override = state.get_model("netbox_monitoring", "MonitoringAssetOverride").objects.create(
+                profile=profile,
+                rule=rule,
+                key=key,
+                assigned_object_type=ct,
+                assigned_object_id=vm.pk,
+                operation="change",
+                parameters={"warning": 85},
+                reason="Preserve this exception",
+            )
+            MigrationExecutor(connection).migrate(latest)
+            state = historical_apps(MigrationExecutor(connection), latest)
+            Assignment = state.get_model("netbox_monitoring", "MonitoringProfileAssignment")
+            assignment = Assignment.objects.get(assigned_object_type_id=ct.pk, assigned_object_id=vm.pk)
+            self.assertEqual((assignment.profile_id, assignment.weight, assignment.enabled), (profile.pk, 100, True))
+            VM = state.get_model("virtualization", "VirtualMachine")
+            self.assertEqual(VM.objects.get(pk=vm.pk).custom_field_data, {"unrelated": "keep"})
+            self.assertEqual(VM.objects.get(pk=empty.pk).custom_field_data, {})
+            self.assertFalse(
+                state.get_model("extras", "CustomField").objects.filter(name="monitoring_profile").exists()
+            )
+            self.assertEqual(
+                state.get_model("netbox_monitoring", "MonitoringAssetOverride").objects.get(pk=override.pk).parameters,
+                {"warning": 85},
+            )
+            # The representable single-profile case can be restored without losing values.
+            state = self.legacy_state()
+            restored = state.get_model("virtualization", "VirtualMachine").objects.get(pk=vm.pk)
+            self.assertEqual(restored.custom_field_data, {"monitoring_profile": profile.pk, "unrelated": "keep"})
+        finally:
+            MigrationExecutor(connection).migrate(latest)
+
+    def test_invalid_profile_reference_aborts_without_removing_values(self):
+        latest = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        try:
+            state = self.legacy_state()
+            VM = state.get_model("virtualization", "VirtualMachine")
+            vm = VM.objects.create(name="invalid-migration", custom_field_data={"monitoring_profile": 999999})
+            with self.assertRaisesMessage(RuntimeError, "Invalid monitoring profile"):
+                MigrationExecutor(connection).migrate(latest)
+            self.assertEqual(VM.objects.get(pk=vm.pk).custom_field_data["monitoring_profile"], 999999)
+            VM.objects.filter(pk=vm.pk).update(custom_field_data={})
+        finally:
+            MigrationExecutor(connection).migrate(latest)
+
+    def test_duplicate_asset_key_exceptions_are_not_silently_discarded(self):
+        latest = MigrationExecutor(connection).loader.graph.leaf_nodes()
+        duplicate = None
+        try:
+            state = self.legacy_state()
+            Profile = state.get_model("netbox_monitoring", "MonitoringProfile")
+            Key = state.get_model("netbox_monitoring", "MonitoringCheckKey")
+            Override = state.get_model("netbox_monitoring", "MonitoringAssetOverride")
+            ct = state.get_model("contenttypes", "ContentType").objects.get(
+                app_label="virtualization", model="virtualmachine"
+            )
+            key = Key.objects.create(name="duplicate.disk", check_type="disk")
+            for name in ("First", "Second"):
+                profile = Profile.objects.create(name=name)
+                duplicate = Override.objects.create(
+                    profile=profile,
+                    key=key,
+                    operation="add",
+                    target="*",
+                    parameters=DEFAULTS["disk"],
+                    assigned_object_type=ct,
+                    assigned_object_id=123,
+                    reason="Duplicate legacy exception",
+                )
+            with self.assertRaisesMessage(RuntimeError, "Multiple exceptions"):
+                MigrationExecutor(connection).migrate(latest)
+            self.assertEqual(Override.objects.count(), 2)
+        finally:
+            if duplicate is not None:
+                duplicate.delete()
             MigrationExecutor(connection).migrate(latest)

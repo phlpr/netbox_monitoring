@@ -29,6 +29,7 @@ menu = PluginMenu(
                 )
                 for model, label in (
                     ("monitoringprofile", "Profiles"),
+                    ("monitoringprofileassignment", "Profile Assignments"),
                     ("monitoringcheckkey", "Check Keys"),
                     ("monitoringcheckrule", "Check Rules"),
                     ("monitoringassetoverride", "Asset Exceptions"),

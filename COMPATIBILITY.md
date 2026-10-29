@@ -1,6 +1,6 @@
 # Compatibility
 
-NetBox Monitoring 0.1.0 requires Python 3.12 or later and NetBox 4.6.10 or later.
+NetBox Monitoring 0.2.0.dev1 requires Python 3.12 or later and NetBox 4.6.10 or later.
 Version numbers track plugin releases independently of NetBox.
 
 | NetBox | Python in CI | Additional local validation |
@@ -10,7 +10,7 @@ Version numbers track plugin releases independently of NetBox.
 
 CI runs the complete plugin test suite against the built wheel with PostgreSQL 16
 and Redis 7. It checks forward/reverse migrations, migration state, native forms
-and APIs, permissions, config resolution, generic object types, and selector setup.
+and APIs, permissions, config resolution, generic object types, weighted composition, assignment cards, and selector-to-assignment migration.
 It also runs `collectstatic` and an installed-wheel smoke test covering VM/Site
 configuration, exceptions, and monitoring tabs. Tests run outside the source package
 to prevent a checkout from masking missing wheel files.

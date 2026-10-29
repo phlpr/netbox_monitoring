@@ -115,6 +115,5 @@ jobs:
         run: |
           python "$NETBOX_ROOT/netbox/manage.py" makemigrations netbox_monitoring --check --dry-run
           python "$NETBOX_ROOT/netbox/manage.py" check
-          python "$NETBOX_ROOT/netbox/manage.py" setup_monitoring_fields --apply
           python "$NETBOX_ROOT/netbox/manage.py" collectstatic --no-input
           python "$NETBOX_ROOT/netbox/manage.py" shell -c 'from tests.wheel_smoke import verify_install; verify_install()'

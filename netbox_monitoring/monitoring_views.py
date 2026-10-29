@@ -6,7 +6,8 @@ from urllib.parse import urlencode
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.shortcuts import render
+from django.http import Http404
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from netbox.views import generic
 from utilities.forms import restrict_form_fields
@@ -16,7 +17,7 @@ from . import models
 from . import monitoring_filtersets as filters
 from . import monitoring_forms as forms
 from . import monitoring_tables as tables
-from .assets import asset_config_url, asset_models
+from .assets import asset_config_url, asset_models, asset_object_types
 from .monitoring_models import assigned_assets
 from .monitoring_permissions import MonitoringWriteMixin, can_manage_monitoring
 from .monitoring_resolver import resolve_monitoring
@@ -56,6 +57,10 @@ class MonitoringObjectView(LoginRequiredMixin, generic.ObjectView):
                 )
             )
         )
+        if isinstance(instance, models.MonitoringProfileAssignment):
+            names = ("assigned_object", "profile", "weight", "enabled", "description")
+        elif isinstance(instance, models.MonitoringAssetOverride):
+            names = tuple(name for name in names if name not in ("profile", "rule"))
         rows = []
         for name in names:
             value = getattr(instance, name)
@@ -83,7 +88,39 @@ class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.Objec
     template_name = "netbox_monitoring/monitoring_edit.html"
     htmx_template_name = "netbox_monitoring/monitoring_form.html"
 
+    def alter_object(self, obj, request, url_args, url_kwargs):
+        obj = super().alter_object(obj, request, url_args, url_kwargs)
+        if obj.pk or not isinstance(obj, (models.MonitoringProfileAssignment, models.MonitoringAssetOverride)):
+            return obj
+        target = self.get_extra_addanother_params(request)
+        if not target:
+            return obj
+        try:
+            object_type_id = int(target["assigned_object_type"])
+            object_id = int(target["assigned_object_id"])
+        except (TypeError, ValueError):
+            raise Http404("Invalid monitoring asset.") from None
+        ct = get_object_or_404(asset_object_types(), pk=object_type_id)
+        assets = ct.model_class().objects.restrict(request.user, "view")
+        if isinstance(obj, models.MonitoringProfileAssignment):
+            assets = assets.restrict(request.user, "change")
+        obj.assigned_object = get_object_or_404(assets, pk=object_id)
+        return obj
+
+    def get_extra_addanother_params(self, request):
+        if self.queryset.model in (models.MonitoringProfileAssignment, models.MonitoringAssetOverride):
+            names = ("assigned_object_type", "assigned_object_id")
+            if all(request.GET.get(name) for name in names):
+                return {name: request.GET[name] for name in names}
+        return super().get_extra_addanother_params(request)
+
     def get_extra_context(self, request, instance):
+        if isinstance(instance, (models.MonitoringProfileAssignment, models.MonitoringAssetOverride)):
+            asset = instance.assigned_object
+            visible = (
+                asset is not None and type(asset).objects.restrict(request.user, "view").filter(pk=asset.pk).exists()
+            )
+            return {"affected_assets": [asset] if visible else []}
         profile = (
             instance
             if isinstance(instance, models.MonitoringProfile)
@@ -94,7 +131,7 @@ class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.Objec
     def post(self, request, *args, **kwargs):
         if "_preview" not in request.POST:
             return super().post(request, *args, **kwargs)
-        instance = self.get_object(**kwargs)
+        instance = self.alter_object(self.get_object(**kwargs), request, args, kwargs)
         before = (
             {field.name: getattr(instance, field.name) for field in instance._meta.concrete_fields}
             if instance.pk
@@ -141,6 +178,7 @@ class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.Objec
 # Separate classes preserve conventional model/action names for NetBox links.
 for model in (
     models.MonitoringProfile,
+    models.MonitoringProfileAssignment,
     models.MonitoringCheckKey,
     models.MonitoringCheckRule,
     models.MonitoringAssetOverride,
@@ -201,7 +239,9 @@ for model in (
 
 
 def monitoring_tab_context(view, request, instance):
-    context = {}
+    from .template_content import assignment_card_context
+
+    context = assignment_card_context(request, instance)
     try:
         context["monitoring"] = resolve_monitoring(instance, request.user)
         if context["monitoring"]["configured"]:
@@ -211,7 +251,6 @@ def monitoring_tab_context(view, request, instance):
             ):
                 query = urlencode(
                     {
-                        "profile": context["monitoring"]["profile"]["id"],
                         "assigned_object_type": ContentType.objects.get_for_model(instance).pk,
                         "assigned_object_id": instance.pk,
                         "return_url": reverse(get_viewname(instance, "monitoring"), args=[instance.pk]),

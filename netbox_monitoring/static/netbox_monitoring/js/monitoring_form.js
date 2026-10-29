@@ -23,7 +23,8 @@
     const prefix = kind.name.slice(0, -"parameter_kind".length);
     const field = name => form.querySelector('[name="' + prefix + name + '"]');
     const key = field("key");
-    const rule = form.querySelector("[data-monitoring-rule]");
+    const assetType = form.querySelector("[data-monitoring-object-types]");
+    const assetId = field("assigned_object_id");
     const operation = form.querySelector("[data-monitoring-operation]");
     const currentOperation = () => operation?.value || "add";
     let generation = 0;
@@ -40,27 +41,12 @@
       const visible = op === "disable" ? [] : (groups[kind.value] || []);
       for (const name of parameters) show(name, visible.includes(name));
       show("target", op === "add" && !!kind.value && !["cpu", "memory"].includes(kind.value));
-      show("key", op === "add");
-      if (operation) show("rule", op !== "add");
+      show("key", true);
       const metric = field("metric");
       if (metric && metrics[kind.value]) {
         for (const option of metric.options) {
           option.disabled = !!option.value && !metrics[kind.value].includes(option.value);
         }
-      }
-    }
-    function selectKey(data) {
-      if (key.tomselect) {
-        key.tomselect.addOption({
-          [key.tomselect.settings.valueField || "id"]: String(data.id),
-          [key.tomselect.settings.labelField || "display"]: data.name || data.display
-        });
-        key.tomselect.setValue(String(data.id), true);
-      } else {
-        if (![...key.options].some(option => option.value === String(data.id))) {
-          key.add(new Option(data.name || data.display, String(data.id)));
-        }
-        key.value = String(data.id);
       }
     }
     function showError(message) {
@@ -73,10 +59,10 @@
       }
       alert.textContent = message;
     }
-    async function load(fromRule) {
+    async function load() {
       const current = ++generation;
-      const select = fromRule ? rule : key;
-      const base = fromRule ? rule?.dataset.monitoringRulesUrl : key.dataset.monitoringKeysUrl;
+      const select = key;
+      const base = key.dataset.monitoringKeysUrl;
       ready = false;
       if (!select?.value || !base) {
         kind.value = "";
@@ -91,12 +77,25 @@
         const data = await response.json();
         if (current !== generation) return;
         kind.value = valueOf(data.check_type);
-        if (fromRule) selectKey(data.key);
+        let values = data.default_parameters;
+        if (operation && currentOperation() !== "add") {
+          const label = JSON.parse(assetType.dataset.monitoringObjectTypes)[assetType.value];
+          if (!label || !assetId.value) throw new Error("Select the asset type and ID first.");
+          const baseResponse = await fetch(assetType.dataset.monitoringAssetsUrl + label + "/" + assetId.value + "/base-config/", {
+            headers: { Accept: "application/json" }, credentials: "same-origin", signal: controller.signal
+          });
+          if (!baseResponse.ok) throw new Error("The asset's profile configuration could not be loaded.");
+          const configuration = await baseResponse.json();
+          if (current !== generation) return;
+          const check = configuration.checks.find(check => check.key === data.name);
+          if (!check) throw new Error("This key is absent from the asset's effective profile configuration.");
+          values = check.parameters;
+        }
         for (const name of parameters) {
           const input = field(name);
           if (input) input.value = "";
         }
-        for (const [name, value] of Object.entries(fromRule ? data.parameters : data.default_parameters)) {
+        for (const [name, value] of Object.entries(values)) {
           const input = field(name);
           if (input) input.value = Array.isArray(value) ? value.join("\n") : (value ?? "");
         }
@@ -110,16 +109,15 @@
         if (!controller.signal.aborted && current === generation) showError(error.message);
       }
     }
-    key.addEventListener("change", () => {
-      if (currentOperation() === "add") load(false);
-    }, { signal: controller.signal });
-    rule?.addEventListener("change", () => load(true), { signal: controller.signal });
+    key.addEventListener("change", load, { signal: controller.signal });
+    assetType?.addEventListener("change", load, { signal: controller.signal });
+    assetId?.addEventListener("change", load, { signal: controller.signal });
     operation?.addEventListener("change", () => {
       update();
-      load(currentOperation() !== "add");
+      load();
     }, { signal: controller.signal });
     form.addEventListener("submit", event => {
-      if (!ready && currentOperation() !== "disable") event.preventDefault();
+      if (!ready) event.preventDefault();
     }, { signal: controller.signal });
     update();
   }

@@ -9,7 +9,13 @@ from rest_framework import serializers
 
 from ..assets import asset_object_types, is_asset_model
 from ..choices import MonitoringProfileStatusChoices
-from ..models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
+from ..models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
 from ..monitoring_schema import DEFAULTS
 
 
@@ -17,11 +23,13 @@ class MonitoringSerializerMixin:
     def validate(self, data):
         request = self.context.get("request")
         if request and not self.nested:
-            for key in ("profile", "rule", "platform", "key"):
+            for key in ("profile", "platform", "key"):
+                if self.Meta.model is MonitoringAssetOverride and key == "profile":
+                    continue
                 related = data.get(key, getattr(self.instance, key, None) if self.instance else None)
                 if related and not type(related).objects.restrict(request.user, "view").filter(pk=related.pk).exists():
                     raise serializers.ValidationError({key: "View permission is required for the selected object."})
-            if self.Meta.model is MonitoringAssetOverride:
+            if self.Meta.model in (MonitoringAssetOverride, MonitoringProfileAssignment):
                 ct = data.get("assigned_object_type", getattr(self.instance, "assigned_object_type", None))
                 asset_id = data.get("assigned_object_id", getattr(self.instance, "assigned_object_id", None))
                 if ct and asset_id:
@@ -128,8 +136,6 @@ class MonitoringCheckRuleSerializer(MonitoringSerializerMixin, PrimaryModelSeria
 
 
 class MonitoringAssetOverrideSerializer(MonitoringSerializerMixin, PrimaryModelSerializer):
-    profile = MonitoringProfileSerializer(nested=True)
-    rule = MonitoringCheckRuleSerializer(nested=True, required=False, allow_null=True)
     key = MonitoringCheckKeySerializer(nested=True)
     check_type = serializers.CharField(read_only=True)
     assigned_object_type = ContentTypeField(queryset=asset_object_types())
@@ -141,8 +147,6 @@ class MonitoringAssetOverrideSerializer(MonitoringSerializerMixin, PrimaryModelS
             "id",
             "url",
             "display",
-            "profile",
-            "rule",
             "assigned_object_type",
             "assigned_object_id",
             "key",
@@ -163,3 +167,29 @@ class MonitoringAssetOverrideSerializer(MonitoringSerializerMixin, PrimaryModelS
             "last_updated",
         )
         brief_fields = ("id", "url", "display", "key", "operation")
+
+
+class MonitoringProfileAssignmentSerializer(MonitoringSerializerMixin, PrimaryModelSerializer):
+    profile = MonitoringProfileSerializer(nested=True)
+    assigned_object_type = ContentTypeField(queryset=asset_object_types())
+
+    class Meta:
+        model = MonitoringProfileAssignment
+        fields = (
+            "id",
+            "url",
+            "display",
+            "assigned_object_type",
+            "assigned_object_id",
+            "profile",
+            "weight",
+            "enabled",
+            "description",
+            "owner",
+            "comments",
+            "tags",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "profile", "weight", "enabled")

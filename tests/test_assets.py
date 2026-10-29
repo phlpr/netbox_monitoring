@@ -5,8 +5,13 @@ from rest_framework.test import APIClient
 from virtualization.models import VirtualMachine
 
 from netbox_monitoring.assets import asset_config_url
-from netbox_monitoring.models import MonitoringAssetOverride, MonitoringCheckKey, MonitoringCheckRule, MonitoringProfile
-from netbox_monitoring.monitoring_schema import PROFILE_FIELD
+from netbox_monitoring.models import (
+    MonitoringAssetOverride,
+    MonitoringCheckKey,
+    MonitoringCheckRule,
+    MonitoringProfile,
+    MonitoringProfileAssignment,
+)
 
 from .base import MonitoringTestCase
 
@@ -29,9 +34,7 @@ class MonitoredAssetTests(MonitoringTestCase):
 
     def test_discovery_includes_only_configured_visible_assets_and_direct_urls(self):
         none = VirtualMachine.objects.create(name="no-monitoring", site=self.vm.site)
-        null = VirtualMachine.objects.create(
-            name="null-monitoring", site=self.vm.site, custom_field_data={PROFILE_FIELD: None}
-        )
+        null = VirtualMachine.objects.create(name="null-monitoring", site=self.vm.site)
         url = reverse("plugins-api:netbox_monitoring-api:monitored-assets")
         response = self.api.get(url)
         self.assertEqual(response.status_code, 200, response.data)
@@ -49,7 +52,9 @@ class MonitoredAssetTests(MonitoringTestCase):
         self.assertIsNotNone(response.data["previous"])
 
     def test_config_requires_all_related_permissions_and_authentication(self):
-        reader = self.user_with_permissions("asset-discovery", (VirtualMachine, MonitoringProfile))
+        reader = self.user_with_permissions(
+            "asset-discovery", (VirtualMachine, MonitoringProfile, MonitoringProfileAssignment)
+        )
         self.api.force_authenticate(reader)
         response = self.api.get(reverse("plugins-api:netbox_monitoring-api:monitored-assets"))
         self.assertEqual(response.data["count"], 2)
@@ -70,7 +75,7 @@ class MonitoredAssetTests(MonitoringTestCase):
             link = response.context["exception_add_url"]
             query = parse_qs(urlsplit(link).query)
             self.assertEqual(query["assigned_object_id"], [str(asset.pk)])
-            self.assertEqual(query["profile"], [str(self.profile.pk)])
+            self.assertNotIn("profile", query)
             form_response = self.client.get(link)
             self.assertEqual(form_response.status_code, 200)
             self.assertEqual(str(form_response.context["form"].initial["assigned_object_id"]), str(asset.pk))
@@ -79,6 +84,7 @@ class MonitoredAssetTests(MonitoringTestCase):
             (
                 VirtualMachine,
                 MonitoringProfile,
+                MonitoringProfileAssignment,
                 MonitoringCheckKey,
                 MonitoringCheckRule,
                 MonitoringAssetOverride,

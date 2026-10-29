@@ -4,6 +4,28 @@ All notable changes to NetBox Monitoring are documented here.
 
 ## Unreleased
 
+### Added
+
+- Replace the native profile selector with plugin-owned weighted assignments and
+  a Monitoring profiles card on supported object detail pages.
+- Combine multiple profiles deterministically: higher weights select entire check
+  definitions; conflicting definitions at equal weights are rejected.
+- Let asset editors manage assignments with native assignment and asset permissions.
+- Apply asset exceptions by stable check key after profile composition.
+- Export schema version 2 with assignment weights and winning check provenance.
+
+### Upgrade notes
+
+- Back up the database, stop application processes/workers, run migrations, collect
+  static files, and restart with the upgraded plugin.
+- Migrate existing selector values to enabled assignments at weight 100, preserving
+  behavior and removing the native field and its JSON values. Invalid legacy data
+  causes an explicit migration error. The old setup command no longer creates fields.
+- Update adapters for multiple `profiles`; singular `profile` is null when multiple
+  assignments are enabled. Exception writes use asset/key instead of profile/rule.
+- Downgrade requires assignments representable by the previous single selector;
+  otherwise restore the matching database backup and plugin version.
+
 ## 0.1.0 - 2026-10-28
 
 ### Added
