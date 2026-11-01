@@ -4,6 +4,14 @@ All notable changes to NetBox Monitoring are documented here.
 
 ## Unreleased
 
+### Changed
+
+- Use native NetBox model/object permissions exclusively for monitoring UI and API
+  access, including catalogue maintenance and asset exception actions.
+- Remove the additional maintenance group restriction and `monitoring_admin_group`
+  setting. Existing native permission grants now fully determine write access;
+  the obsolete setting can be removed from local plugin configuration.
+
 ## 0.2.0 - 2026-10-29
 
 First production PyPI release. Version 0.1.0 was published on TestPyPI only.

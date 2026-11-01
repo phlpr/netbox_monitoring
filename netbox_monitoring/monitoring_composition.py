@@ -157,7 +157,7 @@ def validate_composition(asset, candidate=None, deleted=None):
             except PermissionDenied:
                 raise ValidationError(
                     "This change conflicts with existing monitoring configuration or active exceptions. "
-                    "Ask the monitoring maintenance group to review it."
+                    "Ask a user with permission to view the complete monitoring configuration to review it."
                 ) from error
             except ValidationError:
                 pass

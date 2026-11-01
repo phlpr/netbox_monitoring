@@ -8,7 +8,7 @@ from rest_framework import serializers
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
 from rest_framework.pagination import LimitOffsetPagination
-from rest_framework.permissions import SAFE_METHODS, BasePermission, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -28,7 +28,6 @@ from ..monitoring_filtersets import (
     MonitoringProfileFilterSet,
 )
 from ..monitoring_models import assigned_assets
-from ..monitoring_permissions import can_manage_monitoring
 from ..monitoring_resolver import resolve_monitoring
 from .serializers import (
     MonitoringAssetOverrideSerializer,
@@ -39,15 +38,8 @@ from .serializers import (
 )
 
 
-class MonitoringMaintenancePermission(BasePermission):
-    message = "Only the configured monitoring maintenance group may change monitoring configuration."
-
-    def has_permission(self, request, view):
-        return request.method in SAFE_METHODS or can_manage_monitoring(request.user)
-
-
 class MonitoringViewSet(NetBoxModelViewSet):
-    permission_classes = (*NetBoxModelViewSet.permission_classes, IsAuthenticated, MonitoringMaintenancePermission)
+    permission_classes = (*NetBoxModelViewSet.permission_classes, IsAuthenticated)
 
 
 class MonitoringProfileViewSet(MonitoringViewSet):
@@ -94,8 +86,7 @@ class MonitoringAssetOverrideViewSet(MonitoringViewSet):
     filterset_class = MonitoringAssetOverrideFilterSet
 
 
-class MonitoringProfileAssignmentViewSet(NetBoxModelViewSet):
-    permission_classes = (*NetBoxModelViewSet.permission_classes, IsAuthenticated)
+class MonitoringProfileAssignmentViewSet(MonitoringViewSet):
     queryset = MonitoringProfileAssignment.objects.select_related("profile", "assigned_object_type")
     serializer_class = MonitoringProfileAssignmentSerializer
     filterset_class = MonitoringProfileAssignmentFilterSet

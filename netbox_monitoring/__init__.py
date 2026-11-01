@@ -11,7 +11,6 @@ class MonitoringConfig(PluginConfig):
     author = "Philipp Prohaszka"
     base_url = "monitoring"
     min_version = "4.6.10"
-    default_settings = {"monitoring_admin_group": "Monitoring Administrators"}
     middleware = ["netbox_monitoring.monitoring_permissions.MonitoringRequestMiddleware"]
 
     def ready(self):

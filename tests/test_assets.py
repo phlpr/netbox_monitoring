@@ -93,3 +93,19 @@ class MonitoredAssetTests(MonitoringTestCase):
         self.client.force_login(reader)
         response = self.client.get(reverse("virtualization:virtualmachine_monitoring", args=[self.vm.pk]))
         self.assertNotContains(response, "Add asset Exception")
+        editor = self.user_with_permissions(
+            "exception-editor",
+            (
+                VirtualMachine,
+                MonitoringProfile,
+                MonitoringProfileAssignment,
+                MonitoringCheckKey,
+                MonitoringCheckRule,
+                MonitoringAssetOverride,
+            ),
+            ("view", "add"),
+        )
+        self.client.force_login(editor)
+        response = self.client.get(reverse("virtualization:virtualmachine_monitoring", args=[self.vm.pk]))
+        self.assertContains(response, "Add asset Exception")
+        self.assertEqual(self.client.get(response.context["exception_add_url"]).status_code, 200)

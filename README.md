@@ -71,14 +71,9 @@ PLUGINS = [
     # Other installed plugins...
     "netbox_monitoring",
 ]
-
-PLUGINS_CONFIG = {
-    # Other plugin settings...
-    "netbox_monitoring": {
-        "monitoring_admin_group": "Monitoring Administrators",
-    },
-}
 ```
+
+No additional plugin settings are required.
 
 Apply the plugin migration and collect its form JavaScript:
 
@@ -121,29 +116,32 @@ assignment records; it creates no selector remnants in native custom fields.
 
 ## Permissions
 
-Create the configured **Monitoring Administrators** group in NetBox and grant its
-members the appropriate native model/object permissions for:
+All UI and API access uses native NetBox model/object permissions. Assign the
+appropriate view/add/change/delete permissions to users or groups for:
 
 - `netbox_monitoring.monitoringprofile`
 - `netbox_monitoring.monitoringcheckkey`
 - `netbox_monitoring.monitoringcheckrule`
 - `netbox_monitoring.monitoringassetoverride`
+- `netbox_monitoring.monitoringprofileassignment`
 
-Central group membership and native permissions are both required for UI and API
-writes to these catalogue and exception models. Group membership alone grants no object access. Superusers retain access.
+Object permission constraints are enforced by the standard NetBox views and API.
+Superusers retain access. No specific group name or membership is required.
 Read permissions on related platforms, profiles, checks, and assets are also
 validated where applicable.
 
 Asset editors manage assignments with view/change permission on the target asset,
 view permission on the selected profile, and the appropriate add/change/delete
-permission on `netbox_monitoring.monitoringprofileassignment`. They do not need
-membership in the central maintenance group. Assignment reads also require access
+permission on `netbox_monitoring.monitoringprofileassignment`. Assignment reads also require access
 to the asset and profile. Give adapter accounts view permissions on the assets,
 active assignments, profiles, check keys, all profile checks, and all active exceptions
 they must export.
 A missing permission results in an error instead of a partial configuration.
 
-The configured group and permission grants are managed by the administrator; neither is created automatically.
+Permission grants are managed by the administrator and are not created automatically.
+The former `monitoring_admin_group` setting is unused and can be removed from
+existing `PLUGINS_CONFIG` entries. Review native permission grants when upgrading:
+they now fully determine who can maintain monitoring configuration.
 
 Profile status uses the native NetBox choice format with `active` (green) and
 `disabled` (gray). It can be configured through
