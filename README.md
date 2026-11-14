@@ -139,9 +139,8 @@ they must export.
 A missing permission results in an error instead of a partial configuration.
 
 Permission grants are managed by the administrator and are not created automatically.
-The former `monitoring_admin_group` setting is unused and can be removed from
-existing `PLUGINS_CONFIG` entries. Review native permission grants when upgrading:
-they now fully determine who can maintain monitoring configuration.
+Review native permission grants when upgrading: they fully determine who can
+maintain monitoring configuration.
 
 Profile status uses the native NetBox choice format with `active` (green) and
 `disabled` (gray). It can be configured through
