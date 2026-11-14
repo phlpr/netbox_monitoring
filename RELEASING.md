@@ -35,7 +35,7 @@ No long-lived PyPI API token is required. TestPyPI and PyPI are separate indices
    python -m build
    python -m twine check --strict dist/*
    python scripts/check_distribution.py
-   python scripts/release_notes.py v0.2.0 \
+   python scripts/release_notes.py v0.2.1 \
      --repository phlpr/netbox_monitoring \
      --version-file netbox_monitoring/version.py \
      --output /tmp/monitoring-release-notes.md
@@ -65,7 +65,7 @@ dependencies already installed:
 
 ```bash
 python -m pip install --no-deps --index-url https://test.pypi.org/simple/ \
-  netbox-monitoring==0.2.0
+  netbox-monitoring==0.2.1
 ```
 
 Run NetBox migrations, `check`, and `collectstatic --no-input`. Use the isolated configuration in `tests/configuration.py`

@@ -4,6 +4,8 @@ All notable changes to NetBox Monitoring are documented here.
 
 ## Unreleased
 
+## 0.2.1 - 2026-11-14
+
 ### Changed
 
 - Use native NetBox model/object permissions exclusively for monitoring UI and API
@@ -11,6 +13,10 @@ All notable changes to NetBox Monitoring are documented here.
 - Remove the additional maintenance group restriction and `monitoring_admin_group`
   setting. Existing native permission grants now fully determine write access;
   the obsolete setting can be removed from local plugin configuration.
+
+### Fixed
+
+- Remove the obsolete group configuration reference from the README.
 
 ## 0.2.0 - 2026-10-29
 
