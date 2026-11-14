@@ -280,26 +280,130 @@ class MonitoringIntegrationTests(MonitoringTestCase):
 
 
 class MonitoringPermissionTests(MonitoringTestCase):
-    def test_central_group_and_native_model_permissions_are_both_required(self):
-        group = Group.objects.create(name="Monitoring Administrators")
-        models = (MonitoringProfile, MonitoringCheckKey, MonitoringCheckRule, MonitoringAssetOverride, VirtualMachine)
-        plain = self.user_with_permissions("model-admin", models, ("view", "add", "change", "delete"))
-        member = self.user_with_permissions("central-admin", models, ("view", "add", "change", "delete"))
-        member.groups.add(group)
-        group_only = self.user_with_permissions("group-only", (VirtualMachine,))
-        group_only.groups.add(group)
-        api = APIClient()
-        for user, status in ((plain, 403), (group_only, 403), (member, 201), (self.admin, 201)):
-            with self.subTest(user=user):
-                api.force_authenticate(user)
-                response = api.post(api_url("monitoringprofile"), {"name": f"Created by {user}"}, format="json")
-                self.assertEqual(response.status_code, status, response.data)
-        self.client.force_login(plain)
-        self.assertEqual(self.client.get(ui_url("monitoringprofile", "_add")).status_code, 403)
-        self.assertEqual(
-            self.client.post(ui_url("monitoringprofile", "_edit", self.profile.pk), {"name": "Forbidden"}).status_code,
-            403,
+    def maintenance_objects(self):
+        return (self.profile, self.check_key, self.rule, self.make_override())
+
+    def test_native_permissions_allow_api_maintenance_without_group_membership(self):
+        models = (
+            MonitoringProfile,
+            MonitoringProfileAssignment,
+            MonitoringCheckKey,
+            MonitoringCheckRule,
+            MonitoringAssetOverride,
+            VirtualMachine,
         )
+        user = self.user_with_permissions("model-admin", models, ("view", "add", "change", "delete"))
+        self.assertFalse(user.groups.exists())
+        key = MonitoringCheckKey.objects.create(name="disk.native", check_type="disk")
+        api = APIClient()
+        api.force_authenticate(user)
+        for model, data in (
+            ("monitoringprofile", {"name": "Native permissions profile"}),
+            ("monitoringcheckkey", {"name": "cpu.native", "check_type": "cpu"}),
+            (
+                "monitoringcheckrule",
+                {"profile": self.profile.pk, "key": key.pk, "target": "/srv", "parameters": DEFAULTS["disk"]},
+            ),
+            (
+                "monitoringassetoverride",
+                {
+                    "assigned_object_type": "virtualization.virtualmachine",
+                    "assigned_object_id": self.vm.pk,
+                    "key": self.check_key.pk,
+                    "operation": "change",
+                    "parameters": {"warning": 85},
+                    "reason": "Native permissions exception",
+                },
+            ),
+        ):
+            with self.subTest(model=model):
+                response = api.post(api_url(model), data, format="json")
+                self.assertEqual(response.status_code, 201, response.data)
+                url = api_url(model, "detail", response.data["id"])
+                response = api.patch(url, {"description": "Updated with native permissions"}, format="json")
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertEqual(api.delete(url).status_code, 204)
+
+    def test_native_group_permissions_allow_ui_maintenance(self):
+        instances = self.maintenance_objects()
+        user = self.user_with_permissions(
+            "team-editor",
+            tuple(type(obj) for obj in instances) + (VirtualMachine, MonitoringProfileAssignment),
+            ("view", "add", "change", "delete"),
+        )
+        permission = user.object_permissions.get()
+        group = Group.objects.create(name="Monitoring team")
+        permission.groups.add(group)
+        permission.users.remove(user)
+        user.groups.add(group)
+        self.client.force_login(user)
+        for instance in instances:
+            model = instance._meta.model_name
+            for suffix, pk in (("_add", None), ("_edit", instance.pk), ("_import", None)):
+                with self.subTest(model=model, suffix=suffix):
+                    self.assertEqual(self.client.get(ui_url(model, suffix, pk)).status_code, 200)
+        response = self.client.post(
+            ui_url("monitoringprofile", "_edit", self.profile.pk),
+            {
+                "name": "Updated by the monitoring team",
+                "status": "active",
+                "object_types": list(self.profile.object_types.values_list("pk", flat=True)),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.name, "Updated by the monitoring team")
+        unused = MonitoringProfile.objects.create(name="Unused profile")
+        delete_url = ui_url("monitoringprofile", "_delete", unused.pk)
+        self.assertEqual(self.client.get(delete_url).status_code, 200)
+        self.assertEqual(self.client.post(delete_url, {"confirm": True}).status_code, 302)
+        self.assertFalse(MonitoringProfile.objects.filter(pk=unused.pk).exists())
+
+    def test_view_permissions_do_not_allow_ui_or_api_writes(self):
+        instances = self.maintenance_objects()
+        user = self.user_with_permissions("read-only", tuple(type(obj) for obj in instances) + (VirtualMachine,))
+        api = APIClient()
+        api.force_authenticate(user)
+        self.client.force_login(user)
+        for instance in instances:
+            model = instance._meta.model_name
+            with self.subTest(model=model):
+                self.assertEqual(api.post(api_url(model), {}, format="json").status_code, 403)
+                url = api_url(model, "detail", instance.pk)
+                self.assertEqual(api.patch(url, {"description": "Forbidden"}, format="json").status_code, 403)
+                self.assertEqual(api.delete(url).status_code, 403)
+            for suffix, pk in (
+                ("_add", None),
+                ("_edit", instance.pk),
+                ("_delete", instance.pk),
+                ("_bulk_edit", None),
+                ("_bulk_delete", None),
+                ("_import", None),
+            ):
+                with self.subTest(model=model, suffix=suffix):
+                    self.assertEqual(self.client.get(ui_url(model, suffix, pk)).status_code, 403)
+
+    def test_object_permission_constraints_restrict_ui_and_api_changes(self):
+        other = MonitoringProfile.objects.create(name="Outside permission scope")
+        user = self.user_with_permissions(
+            "scoped-editor", (MonitoringProfile,), ("view", "change"), constraints={"pk": self.profile.pk}
+        )
+        api = APIClient()
+        api.force_authenticate(user)
+        self.client.force_login(user)
+        for profile, status in ((self.profile, 200), (other, 404)):
+            with self.subTest(profile=profile):
+                response = api.patch(
+                    api_url("monitoringprofile", "detail", profile.pk), {"description": "Scoped edit"}, format="json"
+                )
+                self.assertEqual(response.status_code, status, response.data)
+                self.assertEqual(self.client.get(ui_url("monitoringprofile", "_edit", profile.pk)).status_code, status)
+        self.assertEqual(
+            self.client.post(ui_url("monitoringprofile", "_edit", other.pk), {"name": "Forbidden"}).status_code, 404
+        )
+        other.refresh_from_db()
+        self.assertEqual(other.description, "")
+        self.assertEqual(other.name, "Outside permission scope")
 
     @override_settings(LOGIN_REQUIRED=False, EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_anonymous_reads_are_denied_even_with_public_netbox(self):
@@ -319,9 +423,7 @@ class MonitoringPermissionTests(MonitoringTestCase):
             self.assertEqual(response.data["count"], 0)
 
     def test_related_object_validation_and_asset_profile_selection_require_visibility(self):
-        group = Group.objects.create(name="Monitoring Administrators")
         user = self.user_with_permissions("writer", (MonitoringAssetOverride,), ("view", "add"))
-        user.groups.add(group)
         request = SimpleNamespace(user=user)
         serializer = MonitoringAssetOverrideSerializer(
             data={

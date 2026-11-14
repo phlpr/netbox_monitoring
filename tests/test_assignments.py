@@ -216,12 +216,14 @@ class WeightedAssignmentTests(MonitoringTestCase):
 
 
 class AssignmentPermissionTests(MonitoringTestCase):
-    def test_asset_editor_can_map_profiles_without_catalogue_maintenance_membership(self):
+    def test_asset_editor_can_map_profiles_without_catalogue_write_permissions(self):
         editor = self.user_with_permissions(
             "asset-editor",
-            (VirtualMachine, MonitoringProfile, MonitoringProfileAssignment),
+            (VirtualMachine, MonitoringProfileAssignment),
             ("view", "add", "change", "delete"),
         )
+        viewer = self.user_with_permissions("profile-viewer", (MonitoringProfile,))
+        viewer.object_permissions.get().users.add(editor)
         api = APIClient()
         api.force_authenticate(editor)
         self.assignment.delete()

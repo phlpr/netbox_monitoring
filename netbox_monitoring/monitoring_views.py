@@ -19,7 +19,6 @@ from . import monitoring_forms as forms
 from . import monitoring_tables as tables
 from .assets import asset_config_url, asset_models, asset_object_types
 from .monitoring_models import assigned_assets
-from .monitoring_permissions import MonitoringWriteMixin, can_manage_monitoring
 from .monitoring_resolver import resolve_monitoring
 
 
@@ -84,7 +83,7 @@ class MonitoringObjectView(LoginRequiredMixin, generic.ObjectView):
         return context
 
 
-class MonitoringEditView(MonitoringWriteMixin, LoginRequiredMixin, generic.ObjectEditView):
+class MonitoringEditView(LoginRequiredMixin, generic.ObjectEditView):
     template_name = "netbox_monitoring/monitoring_edit.html"
     htmx_template_name = "netbox_monitoring/monitoring_form.html"
 
@@ -206,12 +205,12 @@ for model in (
     )
     globals()[f"{name}DeleteView"] = type(
         f"{name}DeleteView",
-        (MonitoringWriteMixin, LoginRequiredMixin, generic.ObjectDeleteView),
+        (LoginRequiredMixin, generic.ObjectDeleteView),
         {"queryset": queryset},
     )
     globals()[f"{name}BulkEditView"] = type(
         f"{name}BulkEditView",
-        (MonitoringWriteMixin, LoginRequiredMixin, generic.BulkEditView),
+        (LoginRequiredMixin, generic.BulkEditView),
         {
             "queryset": queryset,
             "table": getattr(tables, f"{name}Table"),
@@ -221,7 +220,7 @@ for model in (
     )
     globals()[f"{name}BulkDeleteView"] = type(
         f"{name}BulkDeleteView",
-        (MonitoringWriteMixin, LoginRequiredMixin, generic.BulkDeleteView),
+        (LoginRequiredMixin, generic.BulkDeleteView),
         {
             "queryset": queryset,
             "table": getattr(tables, f"{name}Table"),
@@ -230,7 +229,7 @@ for model in (
     )
     globals()[f"{name}BulkImportView"] = type(
         f"{name}BulkImportView",
-        (MonitoringWriteMixin, LoginRequiredMixin, generic.BulkImportView),
+        (LoginRequiredMixin, generic.BulkImportView),
         {
             "queryset": queryset,
             "model_form": getattr(forms, f"{name}ImportForm"),
@@ -246,9 +245,7 @@ def monitoring_tab_context(view, request, instance):
         context["monitoring"] = resolve_monitoring(instance, request.user)
         if context["monitoring"]["configured"]:
             context["monitoring_config_url"] = asset_config_url(instance)
-            if can_manage_monitoring(request.user) and request.user.has_perm(
-                "netbox_monitoring.add_monitoringassetoverride"
-            ):
+            if request.user.has_perm("netbox_monitoring.add_monitoringassetoverride"):
                 query = urlencode(
                     {
                         "assigned_object_type": ContentType.objects.get_for_model(instance).pk,

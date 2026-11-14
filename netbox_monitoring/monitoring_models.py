@@ -89,11 +89,6 @@ class MonitoringModel(PrimaryModel):
                 raise ValidationError({"assigned_object_id": "View permission is required for the asset."})
 
     def save(self, *args, **kwargs):
-        from .monitoring_permissions import monitoring_request, require_monitoring_manager
-
-        request = monitoring_request.get()
-        if request and not isinstance(self, MonitoringProfileAssignment):
-            require_monitoring_manager(request.user)
         from .monitoring_transactions import configuration_write
 
         with configuration_write(kwargs.get("using") or self._state.db):
