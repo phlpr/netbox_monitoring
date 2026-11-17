@@ -9,3 +9,6 @@ dist/
 *.sqlite3
 .coverage
 htmlcov/
+
+# Generated documents and other output artifacts
+/output/
